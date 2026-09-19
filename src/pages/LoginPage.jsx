@@ -1344,7 +1344,7 @@ export default function LoginPage() {
                 htmlFor="username"
                 className="block text-xs font-semibold text-slate-700 mb-1"
               >
-                Username
+                Email
               </label>
 
               <input

@@ -175,14 +175,208 @@ function throwSupabaseError(
 
 
 /* =========================================================
+   DATABASE VALUE CLEANERS
+
+   IMPORTANT:
+
+   The frontend may display values with commas:
+
+       100,000
+       1,250,500.50
+
+   PostgreSQL numeric/integer fields must receive:
+
+       100000
+       1250500.50
+
+   Empty numeric/integer fields must receive:
+
+       null
+
+   Property Identification No. is different:
+   it remains TEXT so leading zeroes are preserved.
+========================================================= */
+
+
+/* ---------------------------------------------------------
+   CLEAN NUMERIC
+
+   Examples:
+
+   "100,012"      -> 100012
+   "10,000.50"    -> 10000.50
+   "0"            -> 0
+   0              -> 0
+   ""             -> null
+   null           -> null
+--------------------------------------------------------- */
+
+function cleanNumericValue(value) {
+  if (
+    value === null ||
+    value === undefined ||
+    String(value).trim() === ''
+  ) {
+    return null;
+  }
+
+  const cleaned =
+    String(value)
+      .replace(/,/g, '')
+      .trim();
+
+  if (cleaned === '') {
+    return null;
+  }
+
+  const number =
+    Number(cleaned);
+
+  return Number.isFinite(number)
+    ? number
+    : null;
+}
+
+
+/* ---------------------------------------------------------
+   CLEAN INTEGER
+
+   Examples:
+
+   "1,000" -> 1000
+   "10"    -> 10
+   ""      -> null
+   null    -> null
+--------------------------------------------------------- */
+
+function cleanIntegerValue(value) {
+  if (
+    value === null ||
+    value === undefined ||
+    String(value).trim() === ''
+  ) {
+    return null;
+  }
+
+  const cleaned =
+    String(value)
+      .replace(/,/g, '')
+      .trim();
+
+  if (cleaned === '') {
+    return null;
+  }
+
+  const number =
+    Number(cleaned);
+
+  return Number.isInteger(number)
+    ? number
+    : null;
+}
+
+
+/* ---------------------------------------------------------
+   CLEAN PROPERTY IDENTIFICATION NO.
+
+   IMPORTANT:
+
+   This is NOT converted to Number.
+
+   It remains TEXT because property identification
+   numbers can contain leading zeroes.
+
+   Example:
+
+   "001,234,567" -> "001234567"
+   "000123"      -> "000123"
+--------------------------------------------------------- */
+
+function cleanPropertyIdentificationNo(value) {
+  if (
+    value === null ||
+    value === undefined ||
+    String(value).trim() === ''
+  ) {
+    return '';
+  }
+
+  return String(value)
+    .replace(/,/g, '')
+    .trim();
+}
+
+
+/* ---------------------------------------------------------
+   CLEAN ASSESSMENT ROWS
+--------------------------------------------------------- */
+
+function cleanAssessmentRows(rows) {
+  if (!Array.isArray(rows)) {
+    return [];
+  }
+
+  return rows.map((row = {}) => ({
+    ...row,
+
+    classification:
+      row.classification ?? '',
+
+    /*
+     * NUMERIC
+     */
+    area:
+      cleanNumericValue(
+        row.area
+      ),
+
+    /*
+     * NUMERIC
+     */
+    market_value:
+      cleanNumericValue(
+        row.market_value
+      ),
+
+    /*
+     * VARCHAR / TEXT
+     *
+     * DO NOT convert this to Number.
+     */
+    actual_use:
+      row.actual_use ?? '',
+
+    /*
+     * NUMERIC
+     */
+    assessment_level:
+      cleanNumericValue(
+        row.assessment_level
+      ),
+
+    /*
+     * NUMERIC
+     */
+    assessed_value:
+      cleanNumericValue(
+        row.assessed_value
+      ),
+  }));
+}
+
+
+/* =========================================================
    NORMALIZE TAX DECLARATION
 ========================================================= */
 
 function normalizeTaxDeclaration(data = {}) {
+  /*
+   * CLEAN ASSESSMENT ROWS
+   */
   const assessmentRows =
-    Array.isArray(data.assessment_rows)
-      ? data.assessment_rows
-      : [];
+    cleanAssessmentRows(
+      data.assessment_rows
+    );
 
   const firstRow =
     assessmentRows[0] || {};
@@ -216,8 +410,17 @@ function normalizeTaxDeclaration(data = {}) {
         data.td_no || ''
       ).trim(),
 
+    /*
+     * PROPERTY IDENTIFICATION NO.
+     *
+     * Remains TEXT.
+     *
+     * Removes commas only.
+     */
     property_identification_no:
-      data.property_identification_no || '',
+      cleanPropertyIdentificationNo(
+        data.property_identification_no
+      ),
 
     full_name:
       data.full_name || '',
@@ -228,8 +431,17 @@ function normalizeTaxDeclaration(data = {}) {
       data.owner ||
       '',
 
+    /*
+     * NUMERIC
+     *
+     * Quick Submit never shows/fills this field, so it
+     * arrives as "" — must be cleaned or it fails with
+     * "invalid input syntax for type numeric: ''".
+     */
     owner_tin:
-      data.owner_tin || '',
+      cleanNumericValue(
+        data.owner_tin
+      ),
 
     owner_address:
       data.owner_address || '',
@@ -254,15 +466,24 @@ function normalizeTaxDeclaration(data = {}) {
       data.administrator_name ||
       '',
 
+    /*
+     * NUMERIC
+     *
+     * Quick Submit never shows/fills this field, so it
+     * arrives as "" — must be cleaned or it fails with
+     * "invalid input syntax for type numeric: ''".
+     */
     administrator_tin:
-      data.administrator_tin ||
-      data.admin_tin ||
-      '',
+      cleanNumericValue(
+        data.administrator_tin ??
+        data.admin_tin
+      ),
 
     admin_tin:
-      data.admin_tin ||
-      data.administrator_tin ||
-      '',
+      cleanNumericValue(
+        data.admin_tin ??
+        data.administrator_tin
+      ),
 
     administrator_address:
       data.administrator_address ||
@@ -323,11 +544,29 @@ function normalizeTaxDeclaration(data = {}) {
     survey_no:
       data.survey_no || '',
 
+    /*
+     * NUMERIC
+     *
+     * Quick Submit never shows/fills this field, so it
+     * arrives as "" — must be cleaned or it fails with
+     * "invalid input syntax for type numeric: ''".
+     */
     lot_no:
-      data.lot_no || '',
+      cleanNumericValue(
+        data.lot_no
+      ),
 
+    /*
+     * NUMERIC
+     *
+     * Quick Submit never shows/fills this field, so it
+     * arrives as "" — must be cleaned or it fails with
+     * "invalid input syntax for type numeric: ''".
+     */
     blk_no:
-      data.blk_no || '',
+      cleanNumericValue(
+        data.blk_no
+      ),
 
     boundary_north:
       data.boundary_north || '',
@@ -347,8 +586,15 @@ function normalizeTaxDeclaration(data = {}) {
     is_building:
       data.is_building === true,
 
+    /*
+     * INTEGER
+     *
+     * Empty string becomes null.
+     */
     building_no_of_storeys:
-      data.building_no_of_storeys || '',
+      cleanIntegerValue(
+        data.building_no_of_storeys
+      ),
 
     building_brief_description:
       data.building_brief_description || '',
@@ -373,6 +619,9 @@ function normalizeTaxDeclaration(data = {}) {
     property_kind:
       data.property_kind || '',
 
+    /*
+     * CLEANED ASSESSMENT ROWS
+     */
     assessment_rows:
       assessmentRows,
 
@@ -381,36 +630,65 @@ function normalizeTaxDeclaration(data = {}) {
       firstRow.classification ||
       '',
 
+    /*
+     * NUMERIC
+     */
     area:
-      data.area ||
-      firstRow.area ||
-      '',
+      cleanNumericValue(
+        data.area ??
+        firstRow.area
+      ),
 
+    /*
+     * NUMERIC
+     */
     market_value:
-      data.market_value ||
-      firstRow.market_value ||
-      '',
+      cleanNumericValue(
+        data.market_value ??
+        firstRow.market_value
+      ),
 
+    /*
+     * VARCHAR / TEXT
+     */
     actual_use:
-      data.actual_use ||
-      firstRow.actual_use ||
+      data.actual_use ??
+      firstRow.actual_use ??
       '',
 
+    /*
+     * NUMERIC
+     */
     assessment_level:
-      data.assessment_level ||
-      firstRow.assessment_level ||
-      '',
+      cleanNumericValue(
+        data.assessment_level ??
+        firstRow.assessment_level
+      ),
 
+    /*
+     * NUMERIC
+     */
     assessed_value:
-      data.assessed_value ||
-      firstRow.assessed_value ||
-      '',
+      cleanNumericValue(
+        data.assessed_value ??
+        firstRow.assessed_value
+      ),
 
+    /*
+     * NUMERIC
+     */
     total_market_value:
-      data.total_market_value || 0,
+      cleanNumericValue(
+        data.total_market_value
+      ),
 
+    /*
+     * NUMERIC
+     */
     total_assessed_value:
-      data.total_assessed_value || 0,
+      cleanNumericValue(
+        data.total_assessed_value
+      ),
 
     total_assessed_value_words:
       data.total_assessed_value_words || '',
@@ -428,8 +706,13 @@ function normalizeTaxDeclaration(data = {}) {
     effectivity_qtr:
       data.effectivity_qtr || '',
 
+    /*
+     * INTEGER
+     */
     effectivity_yr:
-      data.effectivity_yr || '',
+      cleanIntegerValue(
+        data.effectivity_yr
+      ),
 
     effectivity_date:
       data.effectivity_date || '',
@@ -449,8 +732,13 @@ function normalizeTaxDeclaration(data = {}) {
     previous_td_no:
       data.previous_td_no || '',
 
+    /*
+     * NUMERIC
+     */
     previous_av:
-      data.previous_av || 0,
+      cleanNumericValue(
+        data.previous_av
+      ),
 
     memoranda:
       data.memoranda || '',
@@ -504,7 +792,8 @@ function normalizeTaxDeclaration(data = {}) {
       'Pending',
 
     rejection_reason:
-      data.rejection_reason || '',
+      data.rejection_reason ||
+      '',
 
     is_hidden:
       data.is_hidden === true,
@@ -518,16 +807,6 @@ function normalizeTaxDeclaration(data = {}) {
 
    DESTINATION:
    /analytics
-
-   IMPORTANT:
-   This replaces the old RPC/custom-token login.
-
-   The Supabase Auth JWT created here is what allows
-   RLS policies using:
-
-   TO authenticated
-
-   to recognize the logged-in user.
 ========================================================= */
 
 export async function loginAdmin(
@@ -555,10 +834,6 @@ export async function loginAdmin(
     '[ADMIN LOGIN] Supabase Auth attempt:',
     email
   );
-
-  /* -------------------------------------------------------
-     REAL SUPABASE AUTHENTICATION
-  ------------------------------------------------------- */
 
   const {
     data,
@@ -590,10 +865,6 @@ export async function loginAdmin(
     }
   );
 
-  /* -------------------------------------------------------
-     SUPABASE ERROR
-  ------------------------------------------------------- */
-
   if (error) {
     console.error(
       '[ADMIN LOGIN ERROR]',
@@ -606,29 +877,17 @@ export async function loginAdmin(
     );
   }
 
-  /* -------------------------------------------------------
-     USER MUST EXIST
-  ------------------------------------------------------- */
-
   if (!data?.user) {
     throw new Error(
       'Supabase authentication did not return a user.'
     );
   }
 
-  /* -------------------------------------------------------
-     SESSION MUST EXIST
-  ------------------------------------------------------- */
-
   if (!data?.session) {
     throw new Error(
       'Supabase authentication succeeded, but no session was created.'
     );
   }
-
-  /* -------------------------------------------------------
-     FINAL RESULT
-  ------------------------------------------------------- */
 
   const result = {
     success:
@@ -698,9 +957,6 @@ export async function loginAdmin(
 
    DESTINATION:
    /dashboard
-
-   IMPORTANT:
-   This replaces the old RPC/custom-token login.
 ========================================================= */
 
 export async function loginAssessor(
@@ -728,10 +984,6 @@ export async function loginAssessor(
     '[ASSESSOR LOGIN] Supabase Auth attempt:',
     email
   );
-
-  /* -------------------------------------------------------
-     REAL SUPABASE AUTHENTICATION
-  ------------------------------------------------------- */
 
   const {
     data,
@@ -768,10 +1020,6 @@ export async function loginAssessor(
     }
   );
 
-  /* -------------------------------------------------------
-     SUPABASE ERROR
-  ------------------------------------------------------- */
-
   if (error) {
     console.error(
       '[ASSESSOR LOGIN ERROR]',
@@ -784,29 +1032,17 @@ export async function loginAssessor(
     );
   }
 
-  /* -------------------------------------------------------
-     USER MUST EXIST
-  ------------------------------------------------------- */
-
   if (!data?.user) {
     throw new Error(
       'Supabase authentication did not return a user.'
     );
   }
 
-  /* -------------------------------------------------------
-     SESSION MUST EXIST
-  ------------------------------------------------------- */
-
   if (!data?.session) {
     throw new Error(
       'Supabase authentication succeeded, but no session was created.'
     );
   }
-
-  /* -------------------------------------------------------
-     CHECK ACTUAL ACCOUNT ROLE
-  ------------------------------------------------------- */
 
   const accountRole =
     data.user.user_metadata?.role ||
@@ -830,13 +1066,6 @@ export async function loginAssessor(
       }
     );
 
-    /* -----------------------------------------------------
-       SIGN OUT IMMEDIATELY
-
-       A valid Auth account was found, but it does not
-       belong to the assessor portal.
-    ----------------------------------------------------- */
-
     await supabase.auth.signOut();
 
     clearAuthSession();
@@ -845,10 +1074,6 @@ export async function loginAssessor(
       'This account is not authorized to access the Assessor Portal.'
     );
   }
-
-  /* -------------------------------------------------------
-     FINAL RESULT
-  ------------------------------------------------------- */
 
   const result = {
     success:
@@ -1105,12 +1330,31 @@ export async function updateTaxDeclaration(
     );
   }
 
+  /*
+   * CLEAN ASSESSMENT ROWS
+   */
+  const cleanedAssessmentRows =
+    Array.isArray(
+      data.assessment_rows
+    )
+      ? cleanAssessmentRows(
+          data.assessment_rows
+        )
+      : undefined;
+
   const updateData = {
     td_no:
       data.td_no,
 
+    /*
+     * PROPERTY IDENTIFICATION NO.
+     *
+     * Keep TEXT.
+     */
     property_identification_no:
-      data.property_identification_no,
+      cleanPropertyIdentificationNo(
+        data.property_identification_no
+      ),
 
     full_name:
       data.full_name,
@@ -1118,8 +1362,13 @@ export async function updateTaxDeclaration(
     owner_name:
       data.owner_name,
 
+    /*
+     * NUMERIC
+     */
     owner_tin:
-      data.owner_tin,
+      cleanNumericValue(
+        data.owner_tin
+      ),
 
     owner_address:
       data.owner_address,
@@ -1136,11 +1385,23 @@ export async function updateTaxDeclaration(
     admin_user:
       data.admin_user,
 
+    /*
+     * NUMERIC
+     */
     administrator_tin:
-      data.administrator_tin,
+      cleanNumericValue(
+        data.administrator_tin ??
+        data.admin_tin
+      ),
 
+    /*
+     * NUMERIC
+     */
     admin_tin:
-      data.admin_tin,
+      cleanNumericValue(
+        data.admin_tin ??
+        data.administrator_tin
+      ),
 
     administrator_address:
       data.administrator_address,
@@ -1184,11 +1445,21 @@ export async function updateTaxDeclaration(
     survey_no:
       data.survey_no,
 
+    /*
+     * NUMERIC
+     */
     lot_no:
-      data.lot_no,
+      cleanNumericValue(
+        data.lot_no
+      ),
 
+    /*
+     * NUMERIC
+     */
     blk_no:
-      data.blk_no,
+      cleanNumericValue(
+        data.blk_no
+      ),
 
     boundary_north:
       data.boundary_north,
@@ -1208,8 +1479,13 @@ export async function updateTaxDeclaration(
     is_building:
       data.is_building,
 
+    /*
+     * INTEGER
+     */
     building_no_of_storeys:
-      data.building_no_of_storeys,
+      cleanIntegerValue(
+        data.building_no_of_storeys
+      ),
 
     building_brief_description:
       data.building_brief_description,
@@ -1235,33 +1511,65 @@ export async function updateTaxDeclaration(
     classification:
       data.classification,
 
+    /*
+     * NUMERIC
+     */
     area:
-      data.area,
+      cleanNumericValue(
+        data.area
+      ),
 
+    /*
+     * NUMERIC
+     */
     market_value:
-      data.market_value,
+      cleanNumericValue(
+        data.market_value
+      ),
 
+    /*
+     * VARCHAR / TEXT
+     */
     actual_use:
       data.actual_use,
 
+    /*
+     * NUMERIC
+     */
     assessment_level:
-      data.assessment_level,
+      cleanNumericValue(
+        data.assessment_level
+      ),
 
+    /*
+     * NUMERIC
+     */
     assessed_value:
-      data.assessed_value,
+      cleanNumericValue(
+        data.assessed_value
+      ),
 
+    /*
+     * CLEANED ASSESSMENT ROWS
+     */
     assessment_rows:
-      Array.isArray(
-        data.assessment_rows
-      )
-        ? data.assessment_rows
-        : undefined,
+      cleanedAssessmentRows,
 
+    /*
+     * NUMERIC
+     */
     total_market_value:
-      data.total_market_value,
+      cleanNumericValue(
+        data.total_market_value
+      ),
 
+    /*
+     * NUMERIC
+     */
     total_assessed_value:
-      data.total_assessed_value,
+      cleanNumericValue(
+        data.total_assessed_value
+      ),
 
     total_assessed_value_words:
       data.total_assessed_value_words,
@@ -1275,8 +1583,13 @@ export async function updateTaxDeclaration(
     effectivity_qtr:
       data.effectivity_qtr,
 
+    /*
+     * INTEGER
+     */
     effectivity_yr:
-      data.effectivity_yr,
+      cleanIntegerValue(
+        data.effectivity_yr
+      ),
 
     effectivity_date:
       data.effectivity_date,
@@ -1296,8 +1609,13 @@ export async function updateTaxDeclaration(
     previous_td_no:
       data.previous_td_no,
 
+    /*
+     * NUMERIC
+     */
     previous_av:
-      data.previous_av,
+      cleanNumericValue(
+        data.previous_av
+      ),
 
     memoranda:
       data.memoranda,
@@ -1613,8 +1931,6 @@ export async function uploadTaxDeclarationImage(
 
   /* -------------------------------------------------------
      STORAGE PATH
-
-     RETAINED FROM YOUR ORIGINAL CODE
   ------------------------------------------------------- */
 
   const filePath =
@@ -1917,18 +2233,6 @@ export async function logout() {
 
 /* =========================================================
    AUTH STATUS
-
-   IMPORTANT:
-   This checks the local presence of a token.
-
-   For authoritative Supabase authentication status,
-   use:
-
-   supabase.auth.getUser()
-
-   or:
-
-   supabase.auth.getSession()
 ========================================================= */
 
 export function isAuthenticated() {

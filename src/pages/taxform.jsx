@@ -8,6 +8,9 @@ import React, {
 import {
   fetchTaxDeclarations,
   updateVerificationStatus,
+  submitTaxDeclaration,
+  uploadTaxDeclarationImage,
+  updateTaxDeclaration,
 } from '../assets/services/api';
 
 /* =========================================================
@@ -660,6 +663,277 @@ export default function TaxFormManager({
  
   const [activeTab, setActiveTab] = 
     useState('records'); 
+
+  /* =======================================================
+     MANUAL REGISTRY + DOCUMENT SCAN
+     Added without changing the existing Tax Records /
+     Analytics workflows.
+  ======================================================= */
+
+  const MANUAL_REGISTRY_DEFAULTS = {
+    td_no: '',
+    property_identification_no: '',
+    owner_name: '',
+    owner_tin: '',
+    owner_address: '',
+    owner_telephone: '',
+    administrator_name: '',
+    administrator_tin: '',
+    administrator_address: '',
+    administrator_telephone: '',
+    location_number_street: '',
+    location_barangay_district: '',
+    location_municipality_province_city: 'San Fernando, Romblon',
+    oct_tct_cloa_no: '',
+    cct_no: '',
+    dated: '',
+    survey_no: '',
+    lot_no: '',
+    blk_no: '',
+    total_market_value: '',
+    total_assessed_value: '',
+    total_assessed_value_words: '',
+    taxability_status: 'Taxable',
+    effectivity_qtr: '',
+    effectivity_yr: '',
+    approved_by: '',
+    approval_date: '',
+    cancels_td_no: '',
+    previous_av: '',
+    memoranda: '',
+  };
+
+  const [manualRegistryForm, setManualRegistryForm] =
+    useState(MANUAL_REGISTRY_DEFAULTS);
+
+  const [manualRegistryDocument, setManualRegistryDocument] =
+    useState(null);
+
+  const [manualRegistryPreview, setManualRegistryPreview] =
+    useState('');
+
+  const [savingManualRegistry, setSavingManualRegistry] =
+    useState(false);
+
+  const handleManualRegistryChange = (event) => {
+    const { name, value } = event.target;
+
+    setManualRegistryForm((previous) => ({
+      ...previous,
+      [name]: value,
+    }));
+  };
+
+  const handleManualRegistryDocumentChange = (event) => {
+    const file = event.target.files?.[0] || null;
+
+    if (!file) {
+      setManualRegistryDocument(null);
+      setManualRegistryPreview('');
+      return;
+    }
+
+    if (!file.type.startsWith('image/')) {
+      alert('Please select a scanned document image (JPG, PNG, WEBP, etc.).');
+      event.target.value = '';
+      setManualRegistryDocument(null);
+      setManualRegistryPreview('');
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      alert('The scanned document must be smaller than 5MB.');
+      event.target.value = '';
+      setManualRegistryDocument(null);
+      setManualRegistryPreview('');
+      return;
+    }
+
+    if (manualRegistryPreview) {
+      URL.revokeObjectURL(manualRegistryPreview);
+    }
+
+    setManualRegistryDocument(file);
+    setManualRegistryPreview(URL.createObjectURL(file));
+  };
+
+  const resetManualRegistry = () => {
+    if (manualRegistryPreview) {
+      URL.revokeObjectURL(manualRegistryPreview);
+    }
+
+    setManualRegistryForm(MANUAL_REGISTRY_DEFAULTS);
+    setManualRegistryDocument(null);
+    setManualRegistryPreview('');
+  };
+
+  const handleSaveManualRegistry = async (event) => {
+    event.preventDefault();
+
+    if (!manualRegistryForm.td_no.trim()) {
+      alert('TD No. is required.');
+      return;
+    }
+
+    if (!manualRegistryForm.owner_name.trim()) {
+      alert('Owner name is required.');
+      return;
+    }
+
+    if (!manualRegistryDocument) {
+      alert('Please scan and attach the original tax declaration document.');
+      return;
+    }
+
+    setSavingManualRegistry(true);
+
+    try {
+      const timestampNow = new Date().toISOString();
+
+      /*
+       * Create the manual registry record first.
+       * Existing physical records are treated as Approved
+       * registry entries so they appear in Tax Records.
+       */
+      const payload = {
+        ...manualRegistryForm,
+        id: `TD-MANUAL-${Date.now()}`,
+        full_name: manualRegistryForm.owner_name,
+        submission_mode: 'manual',
+        registry_type: 'Manual Registry',
+        isQuickSubmit: false,
+        is_quick_submit: false,
+        quick_submit: false,
+        verification_status: 'Approved',
+        submitted_at: timestampNow,
+        created_at: timestampNow,
+        updated_at: timestampNow,
+        assessment_rows: [],
+        property_image: null,
+        document_image: null,
+        image_url: null,
+        file_path: null,
+      };
+
+      const response = await submitTaxDeclaration(payload);
+
+      const savedRecord =
+        response?.data ||
+        response?.record ||
+        response ||
+        payload;
+
+      const recordId =
+        getRecordId(savedRecord) ||
+        getRecordId(payload);
+
+      if (!recordId) {
+        throw new Error(
+          'The manual registry was created, but the server did not return a valid record ID for the document scan.'
+        );
+      }
+
+      /*
+       * Upload the scanned document through the existing
+       * tax-declaration image endpoint.
+       */
+      const uploadResponse =
+        await uploadTaxDeclarationImage(
+          manualRegistryDocument,
+          recordId
+        );
+
+      const uploadedUrl =
+        uploadResponse?.data?.image_url ||
+        uploadResponse?.data?.document_image ||
+        uploadResponse?.image_url ||
+        uploadResponse?.document_image ||
+        uploadResponse?.url ||
+        null;
+
+      let finalRecord = {
+        ...payload,
+        ...savedRecord,
+        id: recordId,
+        submission_mode: 'manual',
+        registry_type: 'Manual Registry',
+        verification_status: 'Approved',
+      };
+
+      /*
+       * Store the returned scan URL when the upload endpoint
+       * provides one.
+       */
+      if (uploadedUrl) {
+        try {
+          const updateResponse =
+            await updateTaxDeclaration(
+              recordId,
+              {
+                document_image: uploadedUrl,
+                image_url: uploadedUrl,
+                file_path:
+                  uploadResponse?.file_path ||
+                  finalRecord.file_path ||
+                  '',
+                updated_at: new Date().toISOString(),
+              }
+            );
+
+          finalRecord = {
+            ...finalRecord,
+            ...(updateResponse?.data ||
+              updateResponse ||
+              {}),
+            document_image: uploadedUrl,
+            image_url: uploadedUrl,
+          };
+        } catch (updateError) {
+          /*
+           * The file was already uploaded successfully.
+           * Keep the registry successful even if the optional
+           * URL metadata update is rejected by an older backend.
+           */
+          console.warn(
+            '[MANUAL REGISTRY] Document uploaded but URL metadata update failed:',
+            updateError
+          );
+
+          finalRecord = {
+            ...finalRecord,
+            document_image: uploadedUrl,
+            image_url: uploadedUrl,
+          };
+        }
+      }
+
+      await loadManagerRecords();
+
+      if (typeof onUpdateRecord === 'function') {
+        onUpdateRecord(finalRecord);
+      }
+
+      alert(
+        `Manual tax registry ${manualRegistryForm.td_no} was saved successfully with the scanned document.`
+      );
+
+      resetManualRegistry();
+      setActiveTab('records');
+    } catch (error) {
+      console.error(
+        '[MANUAL REGISTRY] SAVE FAILED:',
+        error
+      );
+
+      alert(
+        error?.message ||
+          'Failed to save the manual registry. Please try again.'
+      );
+    } finally {
+      setSavingManualRegistry(false);
+    }
+  };
+
  
   /* ======================================================= 
      LOAD APPROVED RECORDS DIRECTLY FROM DATABASE 
@@ -1362,6 +1636,19 @@ export default function TaxFormManager({
               }`} 
             > 
               📊 Analytics 
+            </button>
+
+            <button
+              onClick={() =>
+                setActiveTab('manual-registry')
+              }
+              className={`w-full text-left px-3 py-2 rounded-lg font-semibold transition ${
+                activeTab === 'manual-registry'
+                  ? 'bg-blue-900 text-white shadow'
+                  : 'text-slate-700 hover:bg-slate-100'
+              }`}
+            >
+              📝 Manual Registry
             </button> 
  
           </nav> 
@@ -1723,6 +2010,281 @@ export default function TaxFormManager({
             </div> 
           )} 
  
+
+          {/* =================================================
+              MANUAL REGISTRY
+          ================================================= */}
+          {activeTab === 'manual-registry' && (
+            <div className="bg-white p-5 rounded-xl shadow border border-slate-200 space-y-5">
+              <div className="flex flex-col sm:flex-row justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-bold text-blue-900 uppercase">
+                    Manual Tax Registry
+                  </h3>
+                  <p className="text-[10px] text-slate-500 mt-1">
+                    Register an existing paper tax declaration manually and attach its scanned document.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={resetManualRegistry}
+                  disabled={savingManualRegistry}
+                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 px-3 py-2 rounded-lg text-xs font-semibold disabled:opacity-50"
+                >
+                  Clear Form
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveManualRegistry} className="space-y-5">
+                <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+                  <h4 className="text-xs font-bold text-blue-900 uppercase mb-3">
+                    Identification
+                  </h4>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                    {[
+                      ['td_no', 'TD No. *'],
+                      ['property_identification_no', 'Property Identification No.'],
+                      ['owner_name', 'Owner Name *'],
+                      ['owner_tin', 'Owner TIN'],
+                      ['owner_telephone', 'Owner Telephone'],
+                      ['location_barangay_district', 'Barangay / District'],
+                      ['location_number_street', 'Number / Street'],
+                      ['location_municipality_province_city', 'Municipality / Province / City'],
+                      ['administrator_name', 'Administrator / Beneficial User'],
+                      ['administrator_tin', 'Administrator TIN'],
+                      ['administrator_telephone', 'Administrator Telephone'],
+                      ['administrator_address', 'Administrator Address'],
+                    ].map(([name, label]) => (
+                      <div key={name}>
+                        <label className="block text-[10px] font-bold text-slate-700 mb-1">
+                          {label}
+                        </label>
+                        <input
+                          type="text"
+                          name={name}
+                          value={manualRegistryForm[name] || ''}
+                          onChange={handleManualRegistryChange}
+                          className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs bg-white"
+                        />
+                      </div>
+                    ))}
+
+                    <div className="md:col-span-2 lg:col-span-3">
+                      <label className="block text-[10px] font-bold text-slate-700 mb-1">
+                        Owner Address
+                      </label>
+                      <input
+                        type="text"
+                        name="owner_address"
+                        value={manualRegistryForm.owner_address}
+                        onChange={handleManualRegistryChange}
+                        className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs bg-white"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
+                  <h4 className="text-xs font-bold text-blue-900 uppercase mb-3">
+                    Property / Title Information
+                  </h4>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+                    {[
+                      ['oct_tct_cloa_no', 'OCT / TCT / CLOA No.'],
+                      ['cct_no', 'CCT No.'],
+                      ['dated', 'Dated'],
+                      ['survey_no', 'Survey No.'],
+                      ['lot_no', 'Lot No.'],
+                      ['blk_no', 'Blk. No.'],
+                      ['effectivity_qtr', 'Effectivity Quarter'],
+                      ['effectivity_yr', 'Effectivity Year'],
+                    ].map(([name, label]) => (
+                      <div key={name}>
+                        <label className="block text-[10px] font-bold text-slate-700 mb-1">
+                          {label}
+                        </label>
+                        <input
+                          type="text"
+                          name={name}
+                          value={manualRegistryForm[name] || ''}
+                          onChange={handleManualRegistryChange}
+                          className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs bg-white"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4">
+                  <h4 className="text-xs font-bold text-emerald-900 uppercase mb-3">
+                    Assessment / Tax Information
+                  </h4>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-700 mb-1">
+                        Total Market Value
+                      </label>
+                      <input
+                        type="text"
+                        name="total_market_value"
+                        value={manualRegistryForm.total_market_value}
+                        onChange={handleManualRegistryChange}
+                        placeholder="e.g. 1,000,000.00"
+                        className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs bg-white"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-700 mb-1">
+                        Total Assessed Value
+                      </label>
+                      <input
+                        type="text"
+                        name="total_assessed_value"
+                        value={manualRegistryForm.total_assessed_value}
+                        onChange={handleManualRegistryChange}
+                        placeholder="e.g. 200,000.00"
+                        className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs bg-white"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-700 mb-1">
+                        Taxability Status
+                      </label>
+                      <select
+                        name="taxability_status"
+                        value={manualRegistryForm.taxability_status}
+                        onChange={handleManualRegistryChange}
+                        className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs bg-white"
+                      >
+                        <option value="Taxable">Taxable</option>
+                        <option value="Exempt">Exempt</option>
+                      </select>
+                    </div>
+
+                    <div className="md:col-span-2 lg:col-span-3">
+                      <label className="block text-[10px] font-bold text-slate-700 mb-1">
+                        Total Assessed Value in Words
+                      </label>
+                      <input
+                        type="text"
+                        name="total_assessed_value_words"
+                        value={manualRegistryForm.total_assessed_value_words}
+                        onChange={handleManualRegistryChange}
+                        className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs bg-white"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+                  <h4 className="text-xs font-bold text-amber-900 uppercase mb-3">
+                    Approval / History
+                  </h4>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+                    {[
+                      ['approved_by', 'Approved By'],
+                      ['approval_date', 'Approval Date'],
+                      ['cancels_td_no', 'Cancels TD No.'],
+                      ['previous_av', 'Previous AV'],
+                    ].map(([name, label]) => (
+                      <div key={name}>
+                        <label className="block text-[10px] font-bold text-slate-700 mb-1">
+                          {label}
+                        </label>
+                        <input
+                          type="text"
+                          name={name}
+                          value={manualRegistryForm[name] || ''}
+                          onChange={handleManualRegistryChange}
+                          className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs bg-white"
+                        />
+                      </div>
+                    ))}
+
+                    <div className="md:col-span-2 lg:col-span-4">
+                      <label className="block text-[10px] font-bold text-slate-700 mb-1">
+                        Memoranda
+                      </label>
+                      <textarea
+                        name="memoranda"
+                        value={manualRegistryForm.memoranda}
+                        onChange={handleManualRegistryChange}
+                        rows={3}
+                        className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs bg-white resize-y"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-purple-50 border border-purple-200 rounded-xl p-4">
+                  <h4 className="text-xs font-bold text-purple-900 uppercase mb-2">
+                    Document Scan *
+                  </h4>
+
+                  <p className="text-[10px] text-slate-500 mb-3">
+                    Upload a clear scanned image of the physical Tax Declaration. Maximum 5MB.
+                  </p>
+
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handleManualRegistryDocumentChange}
+                    className="w-full border border-slate-300 bg-white rounded-lg px-3 py-2 text-xs"
+                  />
+
+                  {manualRegistryPreview && (
+                    <div className="mt-4 border border-purple-200 rounded-xl bg-white overflow-hidden">
+                      <div className="flex items-center justify-between px-3 py-2 border-b bg-purple-50">
+                        <span className="text-[10px] font-bold text-purple-900">
+                          Scan Preview
+                        </span>
+                        <span className="text-[10px] text-slate-500 truncate max-w-[60%]">
+                          {manualRegistryDocument?.name}
+                        </span>
+                      </div>
+
+                      <div className="p-3 flex justify-center bg-slate-100">
+                        <img
+                          src={manualRegistryPreview}
+                          alt="Scanned Tax Declaration Preview"
+                          className="max-h-96 max-w-full object-contain rounded border border-slate-200"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex flex-col sm:flex-row justify-end gap-2 pt-2 border-t border-slate-200">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('records')}
+                    disabled={savingManualRegistry}
+                    className="bg-slate-200 hover:bg-slate-300 text-slate-700 px-5 py-2 rounded-lg text-xs font-semibold disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+
+                  <button
+                    type="submit"
+                    disabled={savingManualRegistry}
+                    className="bg-blue-900 hover:bg-blue-800 text-white px-5 py-2 rounded-lg text-xs font-semibold disabled:opacity-50"
+                  >
+                    {savingManualRegistry
+                      ? 'Saving Registry...'
+                      : 'Save Manual Registry + Scan'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
+
           {/* ================================================= 
               RECORDS 
           ================================================= */} 

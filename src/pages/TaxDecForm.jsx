@@ -1,11 +1,27 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+
 import { useNavigate } from 'react-router-dom';
+
 import { submitTaxDeclaration } from '../assets/services/api';
+
 import { supabase } from '../assets/services/supabaseClient';
 
 const BARANGAYS_SAN_FERNANDO = [
   "Agtiwa", "Azarga", "Campalingo", "Canjalon", "España",
   "Mabini", "Mabulo", "Otod", "Panangcalan", "Pili", "Poblacion", "Taclobo"
+];
+
+// Standard LGU Actual Use classifications for Real Property Tax purposes.
+// Using a fixed list (instead of free text) keeps the "Actual Use" value
+// accurate/consistent for assessment and downstream reporting.
+const ACTUAL_USE_OPTIONS = [
+  "Residential",
+  "Agricultural",
+  "Commercial",
+  "Industrial",
+  "Mineral",
+  "Timberland",
+  "Special"
 ];
 
 const DEFAULT_FORM_STATE = {
@@ -15,10 +31,12 @@ const DEFAULT_FORM_STATE = {
   owner_name: '',
   owner_tin: '',
   owner_address: '',
+  owner_barangay: '',
   owner_telephone: '',
   administrator_name: '',
   administrator_tin: '',
   administrator_address: '',
+  administrator_barangay: '',
   administrator_telephone: '',
   location_number_street: '',
   location_barangay_district: '',
@@ -65,23 +83,61 @@ const DEFAULT_FORM_STATE = {
 
 // Helper: Format numbers with commas while preserving valid decimal entry
 const formatNumberWithCommas = (value) => {
-  if (!value && value !== 0) return '';
+  if (value === null || value === undefined || value === '') {
+    return '';
+  }
 
-  const cleanStr = value.toString().replace(/[^0-9.]/g, '');
-  const parts = cleanStr.split('.');
+  let str = value.toString().trim();
 
-  parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  if (str.includes(',') && !str.includes('.')) {
+    const commaParts = str.split(',');
 
-  return parts.length > 1
-    ? `${parts[0]}.${parts[1]}`
-    : parts[0];
+    if (
+      commaParts.length === 2 &&
+      commaParts[1].length <= 2
+    ) {
+      str = `${commaParts[0]}.${commaParts[1]}`;
+    } else {
+      str = str.replace(/,/g, '');
+    }
+  }
+
+  str = str.replace(/[^0-9.]/g, '');
+
+  // Keep ONLY the first decimal point.
+  const firstDotIndex = str.indexOf('.');
+
+  if (firstDotIndex !== -1) {
+    const integerPart = str
+      .substring(0, firstDotIndex)
+      .replace(/\./g, '');
+
+    const decimalPart = str
+      .substring(firstDotIndex + 1)
+      .replace(/\./g, '');
+
+    const formattedInteger =
+      integerPart.replace(
+        /\B(?=(\d{3})+(?!\d))/g,
+        ','
+      );
+
+    return `${formattedInteger}.${decimalPart}`;
+  }
+
+  // No decimal point
+  return str.replace(
+    /\B(?=(\d{3})+(?!\d))/g,
+    ','
+  );
 };
 
-// Helper: Clean comma-formatted numbers for mathematical calculation
 const parseFormattedNumber = (val) => {
   if (!val) return 0;
 
-  const num = parseFloat(val.toString().replace(/,/g, ''));
+  const num = parseFloat(
+    val.toString().replace(/,/g, '')
+  );
 
   return isNaN(num) ? 0 : num;
 };
@@ -162,7 +218,6 @@ const numberToWords = (number) => {
 
     if (num >= 1000000000) {
       const billions = Math.floor(num / 1000000000);
-
       result += `${convertNumber(billions)} Billion`;
       num %= 1000000000;
 
@@ -173,7 +228,6 @@ const numberToWords = (number) => {
 
     if (num >= 1000000) {
       const millions = Math.floor(num / 1000000);
-
       result += `${convertNumber(millions)} Million`;
       num %= 1000000;
 
@@ -184,7 +238,6 @@ const numberToWords = (number) => {
 
     if (num >= 1000) {
       const thousands = Math.floor(num / 1000);
-
       result += `${convertNumber(thousands)} Thousand`;
       num %= 1000;
 
@@ -211,6 +264,7 @@ const numberToWords = (number) => {
   const roundedValue = Math.round(numericValue * 100) / 100;
 
   const wholeNumber = Math.floor(roundedValue);
+
   const decimalPart = Math.round(
     (roundedValue - wholeNumber) * 100
   );
@@ -232,6 +286,111 @@ const numberToWords = (number) => {
   return words;
 };
 
+/*
+=========================================================
+AUTOMATIC ADDRESS + DEFAULT VALUATION (ADDED)
+=========================================================
+*/
+
+// Default Market Value / Assessed Value so the form can proceed
+const DEFAULT_VALUATION = '1,000';
+
+// Builds the address from the selected barangay and municipality
+const buildAutoAddress = (barangay, municipality) => {
+  const muni =
+    (municipality || '').trim() || 'San Fernando, Romblon';
+
+  const bgy = (barangay || '').trim();
+
+  return bgy ? `Brgy. ${bgy}, ${muni}` : muni;
+};
+
+// Builds an address for the Owner or Administrator / Beneficial User
+// from that person's selected barangay and the selected municipality.
+const buildPersonAddress = (barangay, municipality) => {
+  return buildAutoAddress(barangay, municipality);
+};
+
+// Fills ONLY the empty values. Anything already entered is kept.
+const applyFormDefaults = (data) => {
+  const source = data || DEFAULT_FORM_STATE;
+
+  const baseRows =
+    Array.isArray(source.assessment_rows) &&
+    source.assessment_rows.length > 0
+      ? source.assessment_rows
+      : DEFAULT_FORM_STATE.assessment_rows;
+
+  // Copy the rows so the shared defaults are never mutated
+  const rows = baseRows.map((row) => ({ ...row }));
+
+  const rowsHaveValues = rows.some(
+    (row) =>
+      parseFormattedNumber(row.market_value) > 0 ||
+      parseFormattedNumber(row.assessed_value) > 0
+  );
+
+  const totalsProvided =
+    parseFormattedNumber(source.total_market_value) > 0 ||
+    parseFormattedNumber(source.total_assessed_value) > 0;
+
+  if (!rowsHaveValues && !totalsProvided) {
+    rows[0] = {
+      ...rows[0],
+      market_value: DEFAULT_VALUATION,
+      assessed_value: DEFAULT_VALUATION
+    };
+  }
+
+  const totalMarketValue =
+    parseFormattedNumber(source.total_market_value) > 0
+      ? source.total_market_value
+      : DEFAULT_VALUATION;
+
+  const totalAssessedValue =
+    parseFormattedNumber(source.total_assessed_value) > 0
+      ? source.total_assessed_value
+      : DEFAULT_VALUATION;
+
+  const autoAddress = buildAutoAddress(
+    source.location_barangay_district,
+    source.location_municipality_province_city
+  );
+
+  return {
+    ...source,
+    assessment_rows: rows,
+    total_market_value: totalMarketValue,
+    total_assessed_value: totalAssessedValue,
+    total_assessed_value_words:
+      numberToWords(totalAssessedValue) ||
+      source.total_assessed_value_words ||
+      '',
+    owner_barangay:
+      source.owner_barangay ||
+      source.location_barangay_district ||
+      '',
+    administrator_barangay:
+      source.administrator_barangay ||
+      source.location_barangay_district ||
+      '',
+    owner_address:
+      source.owner_address ||
+      buildPersonAddress(
+        source.owner_barangay ||
+          source.location_barangay_district,
+        source.location_municipality_province_city
+      ),
+    administrator_address:
+      source.administrator_address ||
+      buildPersonAddress(
+        source.administrator_barangay ||
+          source.location_barangay_district,
+        source.location_municipality_province_city
+      )
+  };
+};
+
 export default function TaxDeclarationForm({
   formData: initialFormData,
   handleRowChange: customHandleRowChange,
@@ -242,17 +401,56 @@ export default function TaxDeclarationForm({
   const navigate = useNavigate();
 
   const [submissionMode, setSubmissionMode] = useState('quick');
+
   const [isSubmitting, setIsSubmitting] = useState(false);
+
   const [errors, setErrors] = useState({});
+
   const [formData, setFormData] = useState(
-    () => initialFormData || DEFAULT_FORM_STATE
+    () => applyFormDefaults(initialFormData || DEFAULT_FORM_STATE)
   );
+
   const [imagePreview, setImagePreview] = useState(null);
+
+  // Remembers the last automatically generated address
+  const lastAutoAddressRef = useRef(
+    buildAutoAddress(
+      (initialFormData || DEFAULT_FORM_STATE).location_barangay_district,
+      (initialFormData || DEFAULT_FORM_STATE)
+        .location_municipality_province_city
+    )
+  );
+
+  const initialOwnerBarangay =
+    (initialFormData || DEFAULT_FORM_STATE).owner_barangay ||
+    (initialFormData || DEFAULT_FORM_STATE).location_barangay_district ||
+    '';
+
+  const initialAdministratorBarangay =
+    (initialFormData || DEFAULT_FORM_STATE).administrator_barangay ||
+    (initialFormData || DEFAULT_FORM_STATE).location_barangay_district ||
+    '';
+
+  const lastOwnerAutoAddressRef = useRef(
+    buildPersonAddress(
+      initialOwnerBarangay,
+      (initialFormData || DEFAULT_FORM_STATE)
+        .location_municipality_province_city
+    )
+  );
+
+  const lastAdministratorAutoAddressRef = useRef(
+    buildPersonAddress(
+      initialAdministratorBarangay,
+      (initialFormData || DEFAULT_FORM_STATE)
+        .location_municipality_province_city
+    )
+  );
 
   // Sync state if initialFormData prop arrives asynchronously
   useEffect(() => {
     if (initialFormData) {
-      setFormData(initialFormData);
+      setFormData(applyFormDefaults(initialFormData));
     }
   }, [initialFormData]);
 
@@ -264,6 +462,86 @@ export default function TaxDeclarationForm({
       }
     };
   }, [imagePreview]);
+
+  /*
+  =====================================================
+  AUTOMATIC OWNER + ADMINISTRATOR ADDRESS
+  Follows the selected Barangay / Municipality until the
+  user types their own address.
+  =====================================================
+  */
+  useEffect(() => {
+    const propertyAuto = buildAutoAddress(
+      formData.location_barangay_district,
+      formData.location_municipality_province_city
+    );
+
+    const ownerBarangay =
+      formData.owner_barangay ||
+      formData.location_barangay_district ||
+      '';
+
+    const administratorBarangay =
+      formData.administrator_barangay ||
+      formData.location_barangay_district ||
+      '';
+
+    const ownerAuto = buildPersonAddress(
+      ownerBarangay,
+      formData.location_municipality_province_city
+    );
+
+    const administratorAuto = buildPersonAddress(
+      administratorBarangay,
+      formData.location_municipality_province_city
+    );
+
+    const previousPropertyAuto =
+      lastAutoAddressRef.current;
+
+    const previousOwnerAuto =
+      lastOwnerAutoAddressRef.current;
+
+    const previousAdministratorAuto =
+      lastAdministratorAutoAddressRef.current;
+
+    setFormData(prev => ({
+      ...prev,
+
+      owner_barangay:
+        prev.owner_barangay ||
+        prev.location_barangay_district ||
+        '',
+
+      administrator_barangay:
+        prev.administrator_barangay ||
+        prev.location_barangay_district ||
+        '',
+
+      owner_address:
+        !prev.owner_address ||
+        prev.owner_address === previousOwnerAuto ||
+        prev.owner_address === previousPropertyAuto
+          ? ownerAuto
+          : prev.owner_address,
+
+      administrator_address:
+        !prev.administrator_address ||
+        prev.administrator_address === previousAdministratorAuto ||
+        prev.administrator_address === previousPropertyAuto
+          ? administratorAuto
+          : prev.administrator_address
+    }));
+
+    lastAutoAddressRef.current = propertyAuto;
+    lastOwnerAutoAddressRef.current = ownerAuto;
+    lastAdministratorAutoAddressRef.current = administratorAuto;
+  }, [
+    formData.location_barangay_district,
+    formData.owner_barangay,
+    formData.administrator_barangay,
+    formData.location_municipality_province_city
+  ]);
 
   const handleChange = (e) => {
     if (customHandleChange) {
@@ -277,6 +555,39 @@ export default function TaxDeclarationForm({
         ...prev,
         [name]: null
       }));
+    }
+
+    if (
+      name === 'owner_barangay' ||
+      name === 'administrator_barangay'
+    ) {
+      const municipality =
+        formData.location_municipality_province_city ||
+        'San Fernando, Romblon';
+
+      const generatedAddress =
+        buildPersonAddress(value, municipality);
+
+      if (name === 'owner_barangay') {
+        setFormData(prev => ({
+          ...prev,
+          owner_barangay: value,
+          owner_address: generatedAddress
+        }));
+
+        lastOwnerAutoAddressRef.current = generatedAddress;
+      } else {
+        setFormData(prev => ({
+          ...prev,
+          administrator_barangay: value,
+          administrator_address: generatedAddress
+        }));
+
+        lastAdministratorAutoAddressRef.current =
+          generatedAddress;
+      }
+
+      return;
     }
 
     if (
@@ -300,7 +611,6 @@ export default function TaxDeclarationForm({
     AUTOMATIC TOTAL ASSESSED VALUE IN WORDS
     =====================================================
     */
-
     if (name === 'total_assessed_value') {
       const formatted = formatNumberWithCommas(value);
 
@@ -411,7 +721,8 @@ export default function TaxDeclarationForm({
 
     if (
       name === 'market_value' ||
-      name === 'assessed_value'
+      name === 'assessed_value' ||
+      name === 'area'
     ) {
       updatedRows[index][name] =
         formatNumberWithCommas(value);
@@ -438,7 +749,6 @@ export default function TaxDeclarationForm({
     AUTOMATIC TOTAL ASSESSED VALUE IN WORDS
     =====================================================
     */
-
     const calculatedTotalAVFormatted =
       calculatedTotalAV > 0
         ? formatNumberWithCommas(
@@ -522,6 +832,90 @@ export default function TaxDeclarationForm({
         newErrors.administrator_telephone =
           "Administrator's telephone must be exactly 11 digits.";
       }
+
+      // Total Market Value: must be a valid amount greater than zero
+      if (
+        formData.total_market_value &&
+        parseFormattedNumber(formData.total_market_value) <= 0
+      ) {
+        newErrors.total_market_value =
+          "Total Market Value must be a valid amount greater than zero.";
+      }
+
+      // Total Assessed Value: must be a valid amount greater than zero
+      if (
+        formData.total_assessed_value &&
+        parseFormattedNumber(formData.total_assessed_value) <= 0
+      ) {
+        newErrors.total_assessed_value =
+          "Total Assessed Value must be a valid amount greater than zero.";
+      }
+
+      // Per-row assessment table validation: only enforced on rows
+      // that have at least one value entered, so blank rows stay optional.
+      (formData.assessment_rows || []).forEach((row, idx) => {
+        const hasAnyValue =
+          row.classification ||
+          row.area ||
+          row.market_value ||
+          row.actual_use ||
+          row.assessment_level ||
+          row.assessed_value;
+
+        if (!hasAnyValue) {
+          return;
+        }
+
+        if (!row.classification?.trim()) {
+          newErrors[`row_${idx}_classification`] =
+            `Row ${idx + 1}: Classification is required.`;
+        }
+
+        if (
+          !row.area ||
+          parseFormattedNumber(row.area) <= 0
+        ) {
+          newErrors[`row_${idx}_area`] =
+            `Row ${idx + 1}: Area must be greater than zero.`;
+        }
+
+        if (
+          !row.market_value ||
+          parseFormattedNumber(row.market_value) <= 0
+        ) {
+          newErrors[`row_${idx}_market_value`] =
+            `Row ${idx + 1}: Market Value must be greater than zero.`;
+        }
+
+        if (!row.actual_use?.trim()) {
+          newErrors[`row_${idx}_actual_use`] =
+            `Row ${idx + 1}: Actual Use is required.`;
+        }
+
+        const levelNum = parseFloat(
+          (row.assessment_level || '')
+            .toString()
+            .replace(/,/g, '')
+        );
+
+        if (
+          !row.assessment_level ||
+          isNaN(levelNum) ||
+          levelNum <= 0 ||
+          levelNum > 100
+        ) {
+          newErrors[`row_${idx}_assessment_level`] =
+            `Row ${idx + 1}: Assessment Level must be a number between 0.01 and 100.`;
+        }
+
+        if (
+          !row.assessed_value ||
+          parseFormattedNumber(row.assessed_value) <= 0
+        ) {
+          newErrors[`row_${idx}_assessed_value`] =
+            `Row ${idx + 1}: Assessed Value must be greater than zero.`;
+        }
+      });
     }
 
     setErrors(newErrors);
@@ -570,22 +964,6 @@ export default function TaxDeclarationForm({
         return;
       }
 
-      const accountType =
-        authenticatedUser.user_metadata?.account_type;
-
-      if (
-        accountType &&
-        accountType !== 'property_owner'
-      ) {
-        setErrors(prev => ({
-          ...prev,
-          submit:
-            'Only Property Owner accounts can submit a Tax Declaration.'
-        }));
-
-        return;
-      }
-
       const mode =
         submissionMode === 'full'
           ? 'full'
@@ -602,18 +980,140 @@ export default function TaxDeclarationForm({
 
       /*
       =====================================================
+      AUTOMATIC ADDRESSES + DEFAULT 1,000 VALUATION
+      (only fills values that are still empty)
+      =====================================================
+      */
+      const defaulted = applyFormDefaults(formData);
+
+      /*
+      =====================================================
+      SANITIZE NUMERIC VALUES FOR THE DATABASE
+      Postgres numeric columns reject comma-formatted strings
+      like "100,012" (invalid input syntax for type numeric).
+      Strip the commas here, right before submission, while the
+      on-screen fields keep showing the comma-formatted values.
+      =====================================================
+      */
+      const sanitizedAssessmentRows = (
+        defaulted.assessment_rows || []
+      ).map((row) => ({
+        ...row,
+        area: row.area
+          ? parseFormattedNumber(row.area)
+          : null,
+        market_value: row.market_value
+          ? parseFormattedNumber(row.market_value)
+          : null,
+        assessment_level: row.assessment_level
+          ? parseFormattedNumber(row.assessment_level)
+          : null,
+        assessed_value: row.assessed_value
+          ? parseFormattedNumber(row.assessed_value)
+          : null
+      }));
+
+      const sanitizedTotalMarketValue = parseFormattedNumber(
+        defaulted.total_market_value
+      );
+
+      const sanitizedTotalAssessedValue = parseFormattedNumber(
+        defaulted.total_assessed_value
+      );
+
+      const sanitizedPreviousAv = formData.previous_av
+        ? parseFormattedNumber(formData.previous_av)
+        : null;
+
+      /*
+      =====================================================
+      SANITIZE INTEGER COLUMNS FOR THE DATABASE
+      Applies the SAME rule regardless of submission mode
+      (Quick Submit or Full Detail) — no mode-specific
+      branching here, so both modes stay consistent with
+      each other. Empty string ("") is invalid for an
+      integer column, so it becomes null instead.
+      =====================================================
+      */
+      const sanitizeIntegerField = (value) => {
+        if (value === null || value === undefined || value === '') {
+          return null;
+        }
+
+        const cleaned = value.toString().replace(/,/g, '').trim();
+
+        if (cleaned === '') {
+          return null;
+        }
+
+        const parsed = parseInt(cleaned, 10);
+
+        return isNaN(parsed) ? null : parsed;
+      };
+
+      const sanitizedOwnerTin = sanitizeIntegerField(
+        formData.owner_tin
+      );
+
+      const sanitizedAdministratorTin = sanitizeIntegerField(
+        formData.administrator_tin
+      );
+
+      const sanitizedLotNo = sanitizeIntegerField(
+        formData.lot_no
+      );
+
+      const sanitizedBlkNo = sanitizeIntegerField(
+        formData.blk_no
+      );
+
+      const sanitizedEffectivityYr = sanitizeIntegerField(
+        formData.effectivity_yr
+      );
+
+      /*
+      =====================================================
       MAKE SURE TOTAL ASSESSED VALUE WORDS IS UPDATED
       BEFORE SUBMISSION
       =====================================================
       */
-
       const automaticAssessedValueWords =
         numberToWords(
-          formData.total_assessed_value
+          defaulted.total_assessed_value
         );
 
       const payload = {
         ...formData,
+
+        // Automatic addresses
+        owner_address: defaulted.owner_address,
+        owner_barangay:
+          defaulted.owner_barangay ||
+          formData.owner_barangay ||
+          formData.location_barangay_district ||
+          '',
+        administrator_address:
+          defaulted.administrator_address,
+        administrator_barangay:
+          defaulted.administrator_barangay ||
+          formData.administrator_barangay ||
+          formData.location_barangay_district ||
+          '',
+
+        // Default valuation (1,000) when nothing was entered.
+        // Sent as plain numbers (no commas) so numeric DB columns accept them.
+        assessment_rows: sanitizedAssessmentRows,
+        total_market_value: sanitizedTotalMarketValue,
+        total_assessed_value: sanitizedTotalAssessedValue,
+        previous_av: sanitizedPreviousAv,
+
+        // Integer columns — same sanitization rule for Quick Submit
+        // and Full Detail, since this payload block runs for both.
+        owner_tin: sanitizedOwnerTin,
+        administrator_tin: sanitizedAdministratorTin,
+        lot_no: sanitizedLotNo,
+        blk_no: sanitizedBlkNo,
+        effectivity_yr: sanitizedEffectivityYr,
 
         // Automatically generated amount in words
         total_assessed_value_words:
@@ -623,6 +1123,7 @@ export default function TaxDeclarationForm({
 
         // Property Owner Account
         submitted_by: authenticatedUser.id,
+
         submitted_by_email:
           authenticatedUser.email || '',
 
@@ -783,6 +1284,7 @@ export default function TaxDeclarationForm({
           submit: message
         }));
       }
+
     } finally {
       setIsSubmitting(false);
     }
@@ -819,6 +1321,7 @@ export default function TaxDeclarationForm({
 
       {/* Submission Mode Selection */}
       <div className="mb-6 p-4 bg-slate-50 rounded-lg border border-slate-200">
+
         <label className="block text-xs font-bold uppercase text-slate-700 mb-2">
           Select Submission Option:
         </label>
@@ -1135,6 +1638,35 @@ export default function TaxDeclarationForm({
                     placeholder="e.g. Purok Mahusay, Poblacion, San Fernando, Romblon"
                     className="w-full border border-slate-300 p-2 rounded text-xs"
                   />
+
+                  <label className="block text-[10px] font-semibold uppercase text-slate-500 mt-2 mb-1">
+                    Owner Barangay
+                  </label>
+
+                  <select
+                    name="owner_barangay"
+                    value={
+                      formData.owner_barangay ||
+                      formData.location_barangay_district ||
+                      ''
+                    }
+                    onChange={handleChange}
+                    className="w-full border border-slate-300 p-2 rounded bg-white text-xs"
+                  >
+                    <option value="">
+                      -- Select Owner Barangay --
+                    </option>
+
+                    {BARANGAYS_SAN_FERNANDO.map((bgy) => (
+                      <option key={bgy} value={bgy}>
+                        {bgy}
+                      </option>
+                    ))}
+                  </select>
+
+                  <p className="text-[10px] text-slate-500 mt-1">
+                    Selecting a barangay automatically updates the Owner Address.
+                  </p>
                 </div>
 
                 <div className="md:col-span-4">
@@ -1219,6 +1751,35 @@ export default function TaxDeclarationForm({
                     placeholder="e.g. Brgy. España, San Fernando, Romblon"
                     className="w-full border border-slate-300 p-2 rounded text-xs"
                   />
+
+                  <label className="block text-[10px] font-semibold uppercase text-slate-500 mt-2 mb-1">
+                    Beneficiary / Administrator Barangay
+                  </label>
+
+                  <select
+                    name="administrator_barangay"
+                    value={
+                      formData.administrator_barangay ||
+                      formData.location_barangay_district ||
+                      ''
+                    }
+                    onChange={handleChange}
+                    className="w-full border border-slate-300 p-2 rounded bg-white text-xs"
+                  >
+                    <option value="">
+                      -- Select Beneficiary Barangay --
+                    </option>
+
+                    {BARANGAYS_SAN_FERNANDO.map((bgy) => (
+                      <option key={bgy} value={bgy}>
+                        {bgy}
+                      </option>
+                    ))}
+                  </select>
+
+                  <p className="text-[10px] text-slate-500 mt-1">
+                    Selecting a barangay automatically updates the Beneficiary / Administrator Address.
+                  </p>
                 </div>
 
                 <div className="md:col-span-4">
@@ -1316,6 +1877,7 @@ export default function TaxDeclarationForm({
                 </div>
 
               </div>
+
             </div>
 
             {/* Cadastral / Title Details */}
@@ -1494,6 +2056,7 @@ export default function TaxDeclarationForm({
                 </div>
 
               </div>
+
             </div>
 
             {/* Property Type / Kind */}
@@ -1506,7 +2069,6 @@ export default function TaxDeclarationForm({
               <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-xs">
 
                 <label className="flex items-center gap-2 cursor-pointer">
-
                   <input
                     type="checkbox"
                     name="is_land"
@@ -1521,7 +2083,6 @@ export default function TaxDeclarationForm({
                 <div className="space-y-1">
 
                   <label className="flex items-center gap-2 cursor-pointer">
-
                     <input
                       type="checkbox"
                       name="is_building"
@@ -1560,12 +2121,12 @@ export default function TaxDeclarationForm({
 
                     </div>
                   )}
+
                 </div>
 
                 <div className="space-y-1">
 
                   <label className="flex items-center gap-2 cursor-pointer">
-
                     <input
                       type="checkbox"
                       name="is_machinery"
@@ -1593,12 +2154,12 @@ export default function TaxDeclarationForm({
 
                     </div>
                   )}
+
                 </div>
 
                 <div className="space-y-1">
 
                   <label className="flex items-center gap-2 cursor-pointer">
-
                     <input
                       type="checkbox"
                       name="is_others"
@@ -1624,9 +2185,11 @@ export default function TaxDeclarationForm({
 
                     </div>
                   )}
+
                 </div>
 
               </div>
+
             </div>
 
             {/* Assessment Table Section */}
@@ -1679,8 +2242,7 @@ export default function TaxDeclarationForm({
                           className="border-b"
                         >
 
-                          <td className="p-1 border">
-
+                          <td className="p-1 border align-top">
                             <input
                               type="text"
                               name="classification"
@@ -1691,13 +2253,20 @@ export default function TaxDeclarationForm({
                                 handleRowChange(idx, e)
                               }
                               placeholder="e.g. Residential"
-                              className="w-full border-0 p-1 text-xs focus:ring-1 focus:ring-blue-800 bg-transparent"
+                              className={`w-full border p-1 text-xs focus:ring-1 focus:ring-blue-800 bg-transparent ${
+                                errors[`row_${idx}_classification`]
+                                  ? 'border-red-500'
+                                  : 'border-0'
+                              }`}
                             />
-
+                            {errors[`row_${idx}_classification`] && (
+                              <p className="text-red-500 text-[9px] mt-0.5">
+                                {errors[`row_${idx}_classification`]}
+                              </p>
+                            )}
                           </td>
 
-                          <td className="p-1 border">
-
+                          <td className="p-1 border align-top">
                             <input
                               type="text"
                               name="area"
@@ -1706,13 +2275,20 @@ export default function TaxDeclarationForm({
                                 handleRowChange(idx, e)
                               }
                               placeholder="0.00"
-                              className="w-full border-0 p-1 text-xs focus:ring-1 focus:ring-blue-800 bg-transparent"
+                              className={`w-full border p-1 text-xs focus:ring-1 focus:ring-blue-800 bg-transparent ${
+                                errors[`row_${idx}_area`]
+                                  ? 'border-red-500'
+                                  : 'border-0'
+                              }`}
                             />
-
+                            {errors[`row_${idx}_area`] && (
+                              <p className="text-red-500 text-[9px] mt-0.5">
+                                {errors[`row_${idx}_area`]}
+                              </p>
+                            )}
                           </td>
 
-                          <td className="p-1 border">
-
+                          <td className="p-1 border align-top">
                             <input
                               type="text"
                               name="market_value"
@@ -1721,28 +2297,50 @@ export default function TaxDeclarationForm({
                                 handleRowChange(idx, e)
                               }
                               placeholder="0.00"
-                              className="w-full border-0 p-1 text-xs focus:ring-1 focus:ring-blue-800 bg-transparent"
+                              className={`w-full border p-1 text-xs focus:ring-1 focus:ring-blue-800 bg-transparent ${
+                                errors[`row_${idx}_market_value`]
+                                  ? 'border-red-500'
+                                  : 'border-0'
+                              }`}
                             />
-
+                            {errors[`row_${idx}_market_value`] && (
+                              <p className="text-red-500 text-[9px] mt-0.5">
+                                {errors[`row_${idx}_market_value`]}
+                              </p>
+                            )}
                           </td>
 
-                          <td className="p-1 border">
-
-                            <input
-                              type="text"
+                          <td className="p-1 border align-top">
+                            <select
                               name="actual_use"
                               value={row.actual_use || ''}
                               onChange={(e) =>
                                 handleRowChange(idx, e)
                               }
-                              placeholder="Residential"
-                              className="w-full border-0 p-1 text-xs focus:ring-1 focus:ring-blue-800 bg-transparent"
-                            />
+                              className={`w-full border p-1 text-xs focus:ring-1 focus:ring-blue-800 bg-white ${
+                                errors[`row_${idx}_actual_use`]
+                                  ? 'border-red-500'
+                                  : 'border-0'
+                              }`}
+                            >
+                              <option value="">
+                                -- Select --
+                              </option>
 
+                              {ACTUAL_USE_OPTIONS.map((use) => (
+                                <option key={use} value={use}>
+                                  {use}
+                                </option>
+                              ))}
+                            </select>
+                            {errors[`row_${idx}_actual_use`] && (
+                              <p className="text-red-500 text-[9px] mt-0.5">
+                                {errors[`row_${idx}_actual_use`]}
+                              </p>
+                            )}
                           </td>
 
-                          <td className="p-1 border">
-
+                          <td className="p-1 border align-top">
                             <input
                               type="text"
                               name="assessment_level"
@@ -1753,13 +2351,20 @@ export default function TaxDeclarationForm({
                                 handleRowChange(idx, e)
                               }
                               placeholder="20"
-                              className="w-full border-0 p-1 text-xs focus:ring-1 focus:ring-blue-800 bg-transparent"
+                              className={`w-full border p-1 text-xs focus:ring-1 focus:ring-blue-800 bg-transparent ${
+                                errors[`row_${idx}_assessment_level`]
+                                  ? 'border-red-500'
+                                  : 'border-0'
+                              }`}
                             />
-
+                            {errors[`row_${idx}_assessment_level`] && (
+                              <p className="text-red-500 text-[9px] mt-0.5">
+                                {errors[`row_${idx}_assessment_level`]}
+                              </p>
+                            )}
                           </td>
 
-                          <td className="p-1 border">
-
+                          <td className="p-1 border align-top">
                             <input
                               type="text"
                               name="assessed_value"
@@ -1770,9 +2375,17 @@ export default function TaxDeclarationForm({
                                 handleRowChange(idx, e)
                               }
                               placeholder="0.00"
-                              className="w-full border-0 p-1 text-xs focus:ring-1 focus:ring-blue-800 bg-transparent font-bold"
+                              className={`w-full border p-1 text-xs focus:ring-1 focus:ring-blue-800 bg-transparent font-bold ${
+                                errors[`row_${idx}_assessed_value`]
+                                  ? 'border-red-500'
+                                  : 'border-0'
+                              }`}
                             />
-
+                            {errors[`row_${idx}_assessed_value`] && (
+                              <p className="text-red-500 text-[9px] mt-0.5">
+                                {errors[`row_${idx}_assessed_value`]}
+                              </p>
+                            )}
                           </td>
 
                         </tr>
@@ -1782,7 +2395,9 @@ export default function TaxDeclarationForm({
                   </tbody>
 
                 </table>
+
               </div>
+
             </div>
 
             {/* Total Valuation & Taxability Status */}
@@ -1801,8 +2416,18 @@ export default function TaxDeclarationForm({
                     value={formData.total_market_value || ''}
                     onChange={handleChange}
                     placeholder="0.00"
-                    className="w-full border border-slate-300 p-2 rounded text-xs"
+                    className={`w-full border p-2 rounded text-xs ${
+                      errors.total_market_value
+                        ? 'border-red-500'
+                        : 'border-slate-300'
+                    }`}
                   />
+
+                  {errors.total_market_value && (
+                    <p className="text-red-500 text-[10px] mt-1">
+                      {errors.total_market_value}
+                    </p>
+                  )}
                 </div>
 
                 <div>
@@ -1816,8 +2441,18 @@ export default function TaxDeclarationForm({
                     value={formData.total_assessed_value || ''}
                     onChange={handleChange}
                     placeholder="0.00"
-                    className="w-full border border-slate-300 p-2 rounded text-xs font-bold text-blue-900"
+                    className={`w-full border p-2 rounded text-xs font-bold text-blue-900 ${
+                      errors.total_assessed_value
+                        ? 'border-red-500'
+                        : 'border-slate-300'
+                    }`}
                   />
+
+                  {errors.total_assessed_value && (
+                    <p className="text-red-500 text-[10px] mt-1">
+                      {errors.total_assessed_value}
+                    </p>
+                  )}
                 </div>
 
               </div>
@@ -1895,6 +2530,7 @@ export default function TaxDeclarationForm({
                 </div>
 
               </div>
+
             </div>
 
             {/* Approval & Memorandum Section */}
@@ -1949,7 +2585,6 @@ export default function TaxDeclarationForm({
               </div>
 
               <div>
-
                 <label className="block text-xs font-semibold uppercase text-slate-600 mb-1">
                   Cancels TD No. & Memoranda / Notes
                 </label>
@@ -1971,7 +2606,6 @@ export default function TaxDeclarationForm({
                   rows="3"
                   className="w-full border border-slate-300 p-2 rounded text-xs"
                 />
-
               </div>
 
             </div>
@@ -2005,6 +2639,7 @@ export default function TaxDeclarationForm({
         </div>
 
       </form>
+
     </div>
   );
 }
