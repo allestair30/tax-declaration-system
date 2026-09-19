@@ -391,6 +391,393 @@ const applyFormDefaults = (data) => {
   };
 };
 
+/*
+=========================================================
+ERROR NOTICES (ADDED)
+Every error on this form is shown with:
+  1. WHAT is wrong (title + the original message)
+  2. HOW to fix it (a specific instruction)
+The same guide text feeds the notice under each field,
+the notice inside the assessment table, the list at the
+top of the form, and the submit-level notice.
+=========================================================
+*/
+
+// Friendly names for each field, used in the error list at the top
+const ERROR_FIELD_LABELS = {
+  td_no: 'TD No.',
+  property_identification_no: 'Property ID No.',
+  full_name: 'Full Name',
+  location_barangay_district: 'Barangay Location',
+  property_image: 'Property Image',
+  owner_telephone: "Owner's Telephone No.",
+  administrator_telephone: "Administrator's Telephone No.",
+  total_market_value: 'Total Market Value',
+  total_assessed_value: 'Total Assessed Value'
+};
+
+const ROW_FIELD_LABELS = {
+  classification: 'Classification',
+  area: 'Area',
+  market_value: 'Market Value',
+  actual_use: 'Actual Use',
+  assessment_level: 'Assessment Level',
+  assessed_value: 'Assessed Value'
+};
+
+const getErrorLabel = (key) => {
+  const rowMatch = /^row_(\d+)_(.+)$/.exec(key);
+
+  if (rowMatch) {
+    return `Assessment table, row ${Number(rowMatch[1]) + 1}: ${
+      ROW_FIELD_LABELS[rowMatch[2]] || rowMatch[2]
+    }`;
+  }
+
+  return ERROR_FIELD_LABELS[key] || key;
+};
+
+// Returns { title, fix } for any error key + message
+const getErrorGuide = (key, message = '') => {
+  const msg = (message || '').toString().toLowerCase();
+
+  // ---- Assessment table rows ----
+  const rowMatch = /^row_(\d+)_(.+)$/.exec(key);
+
+  if (rowMatch) {
+    const field = rowMatch[2];
+
+    const rowGuides = {
+      classification: {
+        title: 'Classification is empty',
+        fix: 'Type the property classification for this row (for example: Residential).'
+      },
+      area: {
+        title: 'Area is empty or zero',
+        fix: 'Enter the area as a number greater than 0 (for example: 250.00).'
+      },
+      market_value: {
+        title: 'Market Value is empty or zero',
+        fix: 'Enter the market value in pesos, greater than 0 (for example: 100,000).'
+      },
+      actual_use: {
+        title: 'Actual Use is not selected',
+        fix: 'Open this dropdown and pick one option (Residential, Agricultural, Commercial, etc.).'
+      },
+      assessment_level: {
+        title: 'Assessment Level is invalid',
+        fix: 'Type a percentage from 0.01 to 100, numbers only (for example: 20).'
+      },
+      assessed_value: {
+        title: 'Assessed Value is empty or zero',
+        fix: 'Enter the assessed value greater than 0. It is usually Market Value × Assessment Level (100,000 × 20% = 20,000).'
+      }
+    };
+
+    return (
+      rowGuides[field] || {
+        title: 'This entry needs a correction',
+        fix: 'Review this box in the row and correct it.'
+      }
+    );
+  }
+
+  // ---- Submit-level errors ----
+  if (key === 'submit') {
+    if (msg.includes('session')) {
+      return {
+        title: 'Your login session has expired',
+        fix: 'You are being sent to the login page. Log in again, open the form, and submit again.'
+      };
+    }
+
+    if (msg.includes('listed below')) {
+      return {
+        title: "The form can't be submitted yet",
+        fix: 'Each problem is listed below with the exact change needed. Select "Go to field" on any item to jump straight to that box.'
+      };
+    }
+
+    if (
+      msg.includes('fetch') ||
+      msg.includes('network') ||
+      msg.includes('server is running')
+    ) {
+      return {
+        title: "Can't reach the server",
+        fix: 'Check your internet connection and make sure the server is running, then press Submit Tax Declaration again.'
+      };
+    }
+
+    if (msg.includes('invalid input syntax')) {
+      return {
+        title: 'A value was not accepted by the database',
+        fix: 'Check the number boxes (TIN, Lot No., Blk No., Effectivity Year, amounts). Use digits only, with no letters or symbols, then submit again.'
+      };
+    }
+
+    return {
+      title: "The tax declaration wasn't submitted",
+      fix: 'Press Submit Tax Declaration to try again. If the same message appears, send a screenshot of it to the system administrator.'
+    };
+  }
+
+  // ---- Field-level errors ----
+  switch (key) {
+    case 'td_no':
+      if (msg.includes('already exists')) {
+        return {
+          title: 'This TD No. is already used',
+          fix: 'Another record already has this number. Check the TD No. on your document for typos, then enter the correct, unique number.'
+        };
+      }
+
+      return {
+        title: 'TD No. is empty',
+        fix: 'Type the Tax Declaration number exactly as printed on your document (for example: TD-2026-001).'
+      };
+
+    case 'property_identification_no':
+      return {
+        title: 'Property ID No. is empty',
+        fix: 'Type the Property Identification Number (PIN) from your Tax Declaration (for example: 048-01-002-03-001).'
+      };
+
+    case 'full_name':
+      return {
+        title: 'Full Name is empty',
+        fix: "Type the property owner's complete name (for example: Juan A. Dela Cruz)."
+      };
+
+    case 'location_barangay_district':
+      return {
+        title: 'No barangay selected',
+        fix: 'Open the Barangay dropdown and choose the barangay where the property is located.'
+      };
+
+    case 'property_image':
+      if (msg.includes('valid image')) {
+        return {
+          title: 'That file is not an image',
+          fix: 'Choose a picture file such as JPG, PNG, or WEBP. PDFs and other documents cannot be used here.'
+        };
+      }
+
+      if (msg.includes('smaller than')) {
+        return {
+          title: 'The image is too large',
+          fix: 'Choose a photo under 5 MB, or resize or compress it first, then upload it again.'
+        };
+      }
+
+      if (msg.includes('failed to read')) {
+        return {
+          title: 'The image could not be read',
+          fix: 'The file may be damaged. Select it again, or choose a different photo of the property.'
+        };
+      }
+
+      return {
+        title: 'No property image uploaded',
+        fix: 'Select "Choose File" under Upload Property Image and pick a clear photo of the property.'
+      };
+
+    case 'owner_telephone':
+    case 'administrator_telephone':
+      return {
+        title: 'Telephone number is not 11 digits',
+        fix: 'Enter exactly 11 digits, numbers only, no spaces or dashes (for example: 09123456789).'
+      };
+
+    case 'total_market_value':
+      return {
+        title: 'Total Market Value is not a valid amount',
+        fix: 'Enter an amount greater than 0 (for example: 100,000). You can also fill in the assessment table and the total is computed for you.'
+      };
+
+    case 'total_assessed_value':
+      return {
+        title: 'Total Assessed Value is not a valid amount',
+        fix: 'Enter an amount greater than 0 (for example: 20,000). You can also fill in the assessment table and the total is computed for you.'
+      };
+
+    default:
+      return {
+        title: 'This entry needs a correction',
+        fix: 'Review this box and correct it.'
+      };
+  }
+};
+
+const ErrorIcon = ({ className = 'w-4 h-4' }) => (
+  <svg
+    className={className}
+    viewBox="0 0 20 20"
+    fill="currentColor"
+    aria-hidden="true"
+  >
+    <path
+      fillRule="evenodd"
+      d="M10 18a8 8 0 100-16 8 8 0 000 16zM9 6a1 1 0 112 0v4a1 1 0 11-2 0V6zm1 8a1 1 0 100-2 1 1 0 000 2z"
+      clipRule="evenodd"
+    />
+  </svg>
+);
+
+// Notice shown directly under the field that has the problem
+const FieldError = ({ field, message, compact = false }) => {
+  if (!message) return null;
+
+  const guide = getErrorGuide(field, message);
+
+  return (
+    <div
+      role="alert"
+      className={`flex items-start gap-1.5 border-l-4 border-red-500 bg-red-50 text-red-700 rounded-r ${
+        compact ? 'mt-1 p-1' : 'mt-1.5 p-2'
+      }`}
+    >
+      <ErrorIcon
+        className={`shrink-0 mt-0.5 text-red-600 ${
+          compact ? 'w-3 h-3' : 'w-4 h-4'
+        }`}
+      />
+
+      <div
+        className={`leading-snug ${
+          compact ? 'text-[9px]' : 'text-[10px]'
+        }`}
+      >
+        <p className="font-bold text-red-800">
+          {guide.title}
+        </p>
+
+        {!compact && (
+          <p className="mt-0.5">
+            {message}
+          </p>
+        )}
+
+        <p className="mt-0.5 text-red-900">
+          <span className="font-semibold">
+            How to fix:
+          </span>{' '}
+          {guide.fix}
+        </p>
+      </div>
+    </div>
+  );
+};
+
+// Notice shown at the top for submit-level problems
+const SubmitErrorNotice = ({ message }) => {
+  if (!message) return null;
+
+  const guide = getErrorGuide('submit', message);
+
+  return (
+    <div
+      role="alert"
+      className="mb-4 flex gap-3 rounded-md border border-red-300 border-l-4 border-l-red-600 bg-red-50 p-3 text-red-800"
+    >
+      <ErrorIcon className="w-5 h-5 shrink-0 mt-0.5 text-red-600" />
+
+      <div className="text-xs leading-relaxed">
+        <p className="font-bold text-sm">
+          {guide.title}
+        </p>
+
+        <p className="mt-0.5">
+          {message}
+        </p>
+
+        <p className="mt-1">
+          <span className="font-semibold">
+            What to do:
+          </span>{' '}
+          {guide.fix}
+        </p>
+      </div>
+    </div>
+  );
+};
+
+// Checklist of every field problem, with a jump button for each
+const ErrorSummary = ({ errors, onJump }) => {
+  const entries = Object.entries(errors || {}).filter(
+    ([key, msg]) => key !== 'submit' && msg
+  );
+
+  if (entries.length === 0) return null;
+
+  const hasRowError = entries.some(([key]) =>
+    key.startsWith('row_')
+  );
+
+  return (
+    <div
+      role="alert"
+      className="mb-4 rounded-md border border-red-300 bg-white shadow-sm"
+    >
+      <div className="flex items-center gap-2 rounded-t-md border-b border-red-200 bg-red-50 px-3 py-2 text-red-800">
+        <ErrorIcon className="w-4 h-4 shrink-0 text-red-600" />
+
+        <p className="text-xs font-bold">
+          {entries.length}{' '}
+          {entries.length === 1
+            ? 'problem needs'
+            : 'problems need'}{' '}
+          fixing before you can submit
+        </p>
+      </div>
+
+      <ol className="divide-y divide-slate-100">
+        {entries.map(([key, message], i) => {
+          const guide = getErrorGuide(key, message);
+
+          return (
+            <li
+              key={key}
+              className="flex items-start gap-3 px-3 py-2 text-xs"
+            >
+              <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white">
+                {i + 1}
+              </span>
+
+              <div className="flex-1">
+                <p className="font-semibold text-slate-800">
+                  {getErrorLabel(key)}:{' '}
+                  <span className="text-red-700">
+                    {guide.title}
+                  </span>
+                </p>
+
+                <p className="mt-0.5 text-slate-600">
+                  {guide.fix}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => onJump(key)}
+                className="shrink-0 rounded border border-red-300 px-2 py-1 text-[10px] font-semibold text-red-700 transition hover:bg-red-50"
+              >
+                Go to field
+              </button>
+            </li>
+          );
+        })}
+      </ol>
+
+      {hasRowError && (
+        <p className="rounded-b-md border-t border-slate-100 bg-slate-50 px-3 py-2 text-[10px] text-slate-600">
+          Not using an assessment row? Clear every box in that row and it will be ignored.
+        </p>
+      )}
+    </div>
+  );
+};
+
 export default function TaxDeclarationForm({
   formData: initialFormData,
   handleRowChange: customHandleRowChange,
@@ -411,6 +798,10 @@ export default function TaxDeclarationForm({
   );
 
   const [imagePreview, setImagePreview] = useState(null);
+
+  // Used to scroll to the error notices and to jump to a field
+  const formRef = useRef(null);
+  const errorNoticeRef = useRef(null);
 
   // Remembers the last automatically generated address
   const lastAutoAddressRef = useRef(
@@ -462,6 +853,12 @@ export default function TaxDeclarationForm({
       }
     };
   }, [imagePreview]);
+
+  // Clear old notices when switching between Quick Submit and Full Detail,
+  // so the error list never points to fields that are not on screen.
+  useEffect(() => {
+    setErrors({});
+  }, [submissionMode]);
 
   /*
   =====================================================
@@ -542,6 +939,54 @@ export default function TaxDeclarationForm({
     formData.administrator_barangay,
     formData.location_municipality_province_city
   ]);
+
+  /*
+  =====================================================
+  ERROR NAVIGATION (ADDED)
+  =====================================================
+  */
+
+  // Scrolls up to the error notices at the top of the form
+  const scrollToErrorNotice = () => {
+    setTimeout(() => {
+      errorNoticeRef.current?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start'
+      });
+    }, 80);
+  };
+
+  // Scrolls to and focuses the input that has the given error key
+  const jumpToField = (key) => {
+    const form = formRef.current;
+
+    if (!form) return;
+
+    let element = null;
+
+    const rowMatch = /^row_(\d+)_(.+)$/.exec(key);
+
+    if (rowMatch) {
+      const rows = form.querySelectorAll('tbody tr');
+
+      element = rows[Number(rowMatch[1])]?.querySelector(
+        `[name="${rowMatch[2]}"]`
+      );
+    } else if (key === 'property_image') {
+      element = form.querySelector('input[type="file"]');
+    } else {
+      element = form.querySelector(`[name="${key}"]`);
+    }
+
+    if (element) {
+      element.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center'
+      });
+
+      element.focus({ preventScroll: true });
+    }
+  };
 
   const handleChange = (e) => {
     if (customHandleChange) {
@@ -712,6 +1157,16 @@ export default function TaxDeclarationForm({
     }
 
     const { name, value } = e.target;
+
+    // Clear this cell's notice as soon as the user edits it
+    const rowErrorKey = `row_${index}_${name}`;
+
+    if (errors[rowErrorKey]) {
+      setErrors(prev => ({
+        ...prev,
+        [rowErrorKey]: null
+      }));
+    }
 
     const updatedRows = [
       ...(formData.assessment_rows || [])
@@ -935,8 +1390,11 @@ export default function TaxDeclarationForm({
     if (!validate()) {
       setErrors(prev => ({
         ...prev,
-        submit: "Please fix the validation errors above."
+        submit: "Please fix the errors listed below."
       }));
+
+      // Bring the notices into view so the user sees what to fix
+      scrollToErrorNotice();
 
       return;
     }
@@ -1278,11 +1736,16 @@ export default function TaxDeclarationForm({
           td_no: message,
           submit: null
         }));
+
+        // Take the user straight to the TD No. box
+        jumpToField('td_no');
       } else {
         setErrors(prev => ({
           ...prev,
           submit: message
         }));
+
+        scrollToErrorNotice();
       }
 
     } finally {
@@ -1379,13 +1842,18 @@ export default function TaxDeclarationForm({
         </div>
       </div>
 
-      {errors.submit && (
-        <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-md">
-          {errors.submit}
-        </div>
-      )}
+      {/* Error notices: submit-level message + checklist of every field problem */}
+      <div ref={errorNoticeRef} className="scroll-mt-4">
+        <SubmitErrorNotice message={errors.submit} />
+
+        <ErrorSummary
+          errors={errors}
+          onJump={jumpToField}
+        />
+      </div>
 
       <form
+        ref={formRef}
         onSubmit={handleSubmit}
         className="space-y-6 text-sm"
         noValidate
@@ -1412,11 +1880,10 @@ export default function TaxDeclarationForm({
               }`}
             />
 
-            {errors.td_no && (
-              <p className="text-red-500 text-[10px] mt-1">
-                {errors.td_no}
-              </p>
-            )}
+            <FieldError
+              field="td_no"
+              message={errors.td_no}
+            />
           </div>
 
           <div>
@@ -1437,11 +1904,10 @@ export default function TaxDeclarationForm({
               }`}
             />
 
-            {errors.property_identification_no && (
-              <p className="text-red-500 text-[10px] mt-1">
-                {errors.property_identification_no}
-              </p>
-            )}
+            <FieldError
+              field="property_identification_no"
+              message={errors.property_identification_no}
+            />
           </div>
 
           <div>
@@ -1462,11 +1928,10 @@ export default function TaxDeclarationForm({
               }`}
             />
 
-            {errors.full_name && (
-              <p className="text-red-500 text-[10px] mt-1">
-                {errors.full_name}
-              </p>
-            )}
+            <FieldError
+              field="full_name"
+              message={errors.full_name}
+            />
           </div>
 
         </div>
@@ -1501,11 +1966,10 @@ export default function TaxDeclarationForm({
                 ))}
               </select>
 
-              {errors.location_barangay_district && (
-                <p className="text-red-500 text-[10px] mt-1">
-                  {errors.location_barangay_district}
-                </p>
-              )}
+              <FieldError
+                field="location_barangay_district"
+                message={errors.location_barangay_district}
+              />
             </div>
 
             <div>
@@ -1527,11 +1991,10 @@ export default function TaxDeclarationForm({
                 }`}
               />
 
-              {errors.owner_telephone && (
-                <p className="text-red-500 text-[10px] mt-1">
-                  {errors.owner_telephone}
-                </p>
-              )}
+              <FieldError
+                field="owner_telephone"
+                message={errors.owner_telephone}
+              />
             </div>
 
             <div>
@@ -1554,11 +2017,10 @@ export default function TaxDeclarationForm({
                 Please upload a valid property image file so it can be previewed seamlessly in the admin dashboard review panel.
               </span>
 
-              {errors.property_image && (
-                <p className="text-red-500 text-[10px] mt-1">
-                  {errors.property_image}
-                </p>
-              )}
+              <FieldError
+                field="property_image"
+                message={errors.property_image}
+              />
 
               {imagePreview && (
                 <div className="mt-2">
@@ -1688,11 +2150,10 @@ export default function TaxDeclarationForm({
                     }`}
                   />
 
-                  {errors.owner_telephone && (
-                    <p className="text-red-500 text-[10px] mt-1">
-                      {errors.owner_telephone}
-                    </p>
-                  )}
+                  <FieldError
+                    field="owner_telephone"
+                    message={errors.owner_telephone}
+                  />
                 </div>
 
               </div>
@@ -1801,11 +2262,10 @@ export default function TaxDeclarationForm({
                     }`}
                   />
 
-                  {errors.administrator_telephone && (
-                    <p className="text-red-500 text-[10px] mt-1">
-                      {errors.administrator_telephone}
-                    </p>
-                  )}
+                  <FieldError
+                    field="administrator_telephone"
+                    message={errors.administrator_telephone}
+                  />
                 </div>
 
               </div>
@@ -2259,11 +2719,11 @@ export default function TaxDeclarationForm({
                                   : 'border-0'
                               }`}
                             />
-                            {errors[`row_${idx}_classification`] && (
-                              <p className="text-red-500 text-[9px] mt-0.5">
-                                {errors[`row_${idx}_classification`]}
-                              </p>
-                            )}
+                            <FieldError
+                              compact
+                              field={`row_${idx}_classification`}
+                              message={errors[`row_${idx}_classification`]}
+                            />
                           </td>
 
                           <td className="p-1 border align-top">
@@ -2281,11 +2741,11 @@ export default function TaxDeclarationForm({
                                   : 'border-0'
                               }`}
                             />
-                            {errors[`row_${idx}_area`] && (
-                              <p className="text-red-500 text-[9px] mt-0.5">
-                                {errors[`row_${idx}_area`]}
-                              </p>
-                            )}
+                            <FieldError
+                              compact
+                              field={`row_${idx}_area`}
+                              message={errors[`row_${idx}_area`]}
+                            />
                           </td>
 
                           <td className="p-1 border align-top">
@@ -2303,11 +2763,11 @@ export default function TaxDeclarationForm({
                                   : 'border-0'
                               }`}
                             />
-                            {errors[`row_${idx}_market_value`] && (
-                              <p className="text-red-500 text-[9px] mt-0.5">
-                                {errors[`row_${idx}_market_value`]}
-                              </p>
-                            )}
+                            <FieldError
+                              compact
+                              field={`row_${idx}_market_value`}
+                              message={errors[`row_${idx}_market_value`]}
+                            />
                           </td>
 
                           <td className="p-1 border align-top">
@@ -2333,11 +2793,11 @@ export default function TaxDeclarationForm({
                                 </option>
                               ))}
                             </select>
-                            {errors[`row_${idx}_actual_use`] && (
-                              <p className="text-red-500 text-[9px] mt-0.5">
-                                {errors[`row_${idx}_actual_use`]}
-                              </p>
-                            )}
+                            <FieldError
+                              compact
+                              field={`row_${idx}_actual_use`}
+                              message={errors[`row_${idx}_actual_use`]}
+                            />
                           </td>
 
                           <td className="p-1 border align-top">
@@ -2357,11 +2817,11 @@ export default function TaxDeclarationForm({
                                   : 'border-0'
                               }`}
                             />
-                            {errors[`row_${idx}_assessment_level`] && (
-                              <p className="text-red-500 text-[9px] mt-0.5">
-                                {errors[`row_${idx}_assessment_level`]}
-                              </p>
-                            )}
+                            <FieldError
+                              compact
+                              field={`row_${idx}_assessment_level`}
+                              message={errors[`row_${idx}_assessment_level`]}
+                            />
                           </td>
 
                           <td className="p-1 border align-top">
@@ -2381,11 +2841,11 @@ export default function TaxDeclarationForm({
                                   : 'border-0'
                               }`}
                             />
-                            {errors[`row_${idx}_assessed_value`] && (
-                              <p className="text-red-500 text-[9px] mt-0.5">
-                                {errors[`row_${idx}_assessed_value`]}
-                              </p>
-                            )}
+                            <FieldError
+                              compact
+                              field={`row_${idx}_assessed_value`}
+                              message={errors[`row_${idx}_assessed_value`]}
+                            />
                           </td>
 
                         </tr>
@@ -2423,11 +2883,10 @@ export default function TaxDeclarationForm({
                     }`}
                   />
 
-                  {errors.total_market_value && (
-                    <p className="text-red-500 text-[10px] mt-1">
-                      {errors.total_market_value}
-                    </p>
-                  )}
+                  <FieldError
+                    field="total_market_value"
+                    message={errors.total_market_value}
+                  />
                 </div>
 
                 <div>
@@ -2448,11 +2907,10 @@ export default function TaxDeclarationForm({
                     }`}
                   />
 
-                  {errors.total_assessed_value && (
-                    <p className="text-red-500 text-[10px] mt-1">
-                      {errors.total_assessed_value}
-                    </p>
-                  )}
+                  <FieldError
+                    field="total_assessed_value"
+                    message={errors.total_assessed_value}
+                  />
                 </div>
 
               </div>
