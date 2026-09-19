@@ -1956,15 +1956,7 @@ export default function TaxFormManager({
                                   '---'} 
                               </p> 
  
-                              <p> 
-                                <strong className="text-slate-900"> 
-                                  Assessed Value: 
-                                </strong>{' '} 
- 
-                                ₱ 
-                                {item.total_assessed_value || 
-                                  '0.00'} 
-                              </p> 
+                              
  
                             </div> 
  
