@@ -164,6 +164,36 @@ function recordFailedLoginAttempt() {
 }
 
 /* =========================================================
+   NORMALIZE ROLE
+========================================================= */
+
+function normalizeRole(value) {
+  const normalized =
+    String(value || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[\s_-]+/g, '');
+
+  if (
+    normalized === 'administrator' ||
+    normalized === 'admin' ||
+    normalized === 'municipalofficial' ||
+    normalized === 'municipalofficials'
+  ) {
+    return 'administrator';
+  }
+
+  if (
+    normalized === 'assessor' ||
+    normalized === 'assessoruser'
+  ) {
+    return 'assessor';
+  }
+
+  return '';
+}
+
+/* =========================================================
    LOGIN PAGE
 ========================================================= */
 
@@ -413,7 +443,7 @@ export default function LoginPage() {
       );
 
       console.log(
-        '[LOGIN] Role:',
+        '[LOGIN] Selected Role:',
         role
       );
 
@@ -427,7 +457,13 @@ export default function LoginPage() {
       );
 
       /* ===================================================
-         CLEAR ANY OLD INVALID APPLICATION SESSION
+         IMPORTANT SECURITY FIX
+
+         ALWAYS CLEAR THE PREVIOUS SUPABASE SESSION
+         BEFORE AUTHENTICATING A DIFFERENT USER/ROLE.
+
+         This prevents an existing administrator session
+         from being reused when logging in as assessor.
       =================================================== */
 
       try {
@@ -449,12 +485,56 @@ export default function LoginPage() {
               }
             : null
         );
+
+        if (existingSession) {
+          console.log(
+            '[LOGIN] Existing session detected. Signing out before new login...'
+          );
+
+          const {
+            error: signOutError,
+          } =
+            await supabase.auth.signOut();
+
+          if (signOutError) {
+            console.error(
+              '[LOGIN] Unable to clear existing Supabase session:',
+              signOutError
+            );
+
+            setError(
+              'Unable to clear the previous authentication session. Please refresh the page and try again.'
+            );
+
+            return;
+          }
+
+          console.log(
+            '[LOGIN] Previous Supabase session cleared.'
+          );
+        }
       } catch (sessionCheckError) {
         console.warn(
-          '[LOGIN] Unable to inspect existing Supabase session:',
+          '[LOGIN] Unable to inspect/clear existing Supabase session:',
           sessionCheckError
         );
       }
+
+      /* ===================================================
+         CLEAR OLD APPLICATION SESSION DATA
+
+         This prevents old administrator data from being
+         reused while the assessor is logging in.
+      =================================================== */
+
+      localStorage.removeItem('token');
+      localStorage.removeItem('role');
+      localStorage.removeItem('userRole');
+      localStorage.removeItem('username');
+      localStorage.removeItem('user');
+      localStorage.removeItem('authUser');
+      localStorage.removeItem('verified');
+      localStorage.removeItem('isAdminVerified');
 
       /* ===================================================
          AUTHENTICATION
@@ -565,12 +645,93 @@ export default function LoginPage() {
       }
 
       /* ===================================================
+         CHECK RESULT ROLE BEFORE ACCEPTING SESSION
+
+         This prevents an administrator result from being
+         accepted when the user selected Assessor, and
+         prevents an assessor result from being accepted
+         when Administrator was selected.
+      =================================================== */
+
+      const resultUser =
+        result.user || {};
+
+      const returnedRole =
+        normalizeRole(
+          resultUser.official_role ||
+          result.official_role ||
+          resultUser.role ||
+          result.role ||
+          resultUser.user_role ||
+          result.user_role
+        );
+
+      const selectedRole =
+        role === 'administrator'
+          ? 'administrator'
+          : 'assessor';
+
+      console.log(
+        '[LOGIN] Returned application role:',
+        returnedRole || '(not supplied)'
+      );
+
+      console.log(
+        '[LOGIN] Selected application role:',
+        selectedRole
+      );
+
+      if (
+        returnedRole &&
+        returnedRole !== selectedRole
+      ) {
+        console.error(
+          '[LOGIN] ROLE MISMATCH DETECTED.',
+          {
+            selectedRole,
+            returnedRole,
+          }
+        );
+
+        try {
+          await supabase.auth.signOut();
+        } catch (signOutError) {
+          console.error(
+            '[LOGIN] Unable to sign out mismatched session:',
+            signOutError
+          );
+        }
+
+        localStorage.removeItem('token');
+        localStorage.removeItem('role');
+        localStorage.removeItem('userRole');
+        localStorage.removeItem('username');
+        localStorage.removeItem('user');
+        localStorage.removeItem('authUser');
+        localStorage.removeItem('verified');
+        localStorage.removeItem('isAdminVerified');
+
+        setPassword('');
+        setShowPassword(false);
+
+        setError(
+          `This account is registered as ${
+            returnedRole === 'administrator'
+              ? 'Administrator'
+              : 'Assessor'
+          }. Please select the correct login role.`
+        );
+
+        return;
+      }
+
+      /* ===================================================
          IMPORTANT SUPABASE AUTH CHECK
-         
+
          A custom RPC/localStorage login is NOT enough.
          The application requires a real Supabase Auth
          session because your RLS policies use:
-         
+
              TO authenticated
       =================================================== */
 
@@ -648,6 +809,87 @@ export default function LoginPage() {
         return;
       }
 
+      /* ===================================================
+         VERIFY ROLE FROM SUPABASE AUTH METADATA
+
+         This is an additional protection.
+
+         If your login functions place the role in:
+
+             user_metadata.role
+             user_metadata.official_role
+
+         or app_metadata, this verifies it.
+
+         If no role metadata exists, the application result
+         role check above remains the source of validation.
+      =================================================== */
+
+      const metadataRole =
+        normalizeRole(
+          authUser.user_metadata?.official_role ||
+          authUser.user_metadata?.role ||
+          authUser.app_metadata?.official_role ||
+          authUser.app_metadata?.role
+        );
+
+      console.log(
+        '[LOGIN] Supabase metadata role:',
+        metadataRole || '(not supplied)'
+      );
+
+      if (
+        metadataRole &&
+        metadataRole !== selectedRole
+      ) {
+        console.error(
+          '[LOGIN] SUPABASE AUTH ROLE MISMATCH.',
+          {
+            selectedRole,
+            metadataRole,
+            authUserId:
+              authUser.id,
+            email:
+              authUser.email,
+          }
+        );
+
+        try {
+          await supabase.auth.signOut();
+        } catch (signOutError) {
+          console.error(
+            '[LOGIN] Unable to sign out mismatched Supabase user:',
+            signOutError
+          );
+        }
+
+        localStorage.removeItem('token');
+        localStorage.removeItem('role');
+        localStorage.removeItem('userRole');
+        localStorage.removeItem('username');
+        localStorage.removeItem('user');
+        localStorage.removeItem('authUser');
+        localStorage.removeItem('verified');
+        localStorage.removeItem('isAdminVerified');
+
+        setPassword('');
+        setShowPassword(false);
+
+        setError(
+          `This Supabase account is registered as ${
+            metadataRole === 'administrator'
+              ? 'Administrator'
+              : 'Assessor'
+          }, not ${
+            selectedRole === 'administrator'
+              ? 'Administrator'
+              : 'Assessor'
+          }.`
+        );
+
+        return;
+      }
+
       console.log(
         '[LOGIN] REAL SUPABASE AUTH SESSION CONFIRMED:',
         {
@@ -657,6 +899,9 @@ export default function LoginPage() {
             authUser.email,
           expiresAt:
             session.expires_at,
+          selectedRole,
+          metadataRole:
+            metadataRole || null,
         }
       );
 
@@ -672,9 +917,6 @@ export default function LoginPage() {
       /* ===================================================
          BUILD USER OBJECT
       =================================================== */
-
-      const resultUser =
-        result.user || {};
 
       const user = {
         id:
@@ -702,6 +944,7 @@ export default function LoginPage() {
         official_role:
           resultUser.official_role ||
           result.official_role ||
+          metadataRole ||
           '',
       };
 
@@ -716,16 +959,18 @@ export default function LoginPage() {
 
       /* ===================================================
          SELECTED ROLE
+
+         IMPORTANT:
+         The role comes from the role selected by the user
+         AND has already passed the role validation above.
       =================================================== */
 
       const userRole =
-        role === 'administrator'
-          ? 'administrator'
-          : 'assessor';
+        selectedRole;
 
       /* ===================================================
          REAL SUPABASE ACCESS TOKEN
-         
+
          NEVER CREATE A FAKE TOKEN.
       =================================================== */
 
@@ -1030,7 +1275,7 @@ export default function LoginPage() {
 
       /* ===================================================
          NETWORK ERROR
-         
+
          NOT COUNTED AS FAILED LOGIN
       =================================================== */
 
@@ -1441,7 +1686,7 @@ export default function LoginPage() {
                         strokeLinecap="round"
                         strokeLinejoin="round"
                         strokeWidth="2"
-                        d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029M6.228 6.228A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a9.953 9.953 0 01-4.132 5.411M6.228 6.228L3 3m3.228 3.228l3.54 3.54m4.464 4.464L21 21m-3.589-3.589l-3.54-3.54m0 0a3 3 0 10-4.243-4.243m4.243 4.243L9.628 9.628"
+                        d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029M6.228 6.228A9.953 9.953 0 0112 5c4.478 0 8.268 3.943 9.543 7a9.953 9.953 0 01-4.132 5.411M6.228 6.228L3 3m3.228 3.228l3.54 3.54m4.464 4.464L21 21m-3.589-3.589l-3.54-3.54m0 0a3 3 0 10-4.243-4.243m4.243 4.243L9.628 9.628"
                       />
                     </svg>
 
@@ -1457,7 +1702,7 @@ export default function LoginPage() {
                         strokeLinecap="round"
                         strokeLinejoin="round"
                         strokeWidth="2"
-                        d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
+                        d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 3 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
                       />
 
                       <path
