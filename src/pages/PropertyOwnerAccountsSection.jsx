@@ -653,22 +653,9 @@ export default function PropertyOwnerAccountsSection() {
                             'Unnamed Property Owner'}
                         </h3>
 
-                        {/* STATUS */}
+                  
 
-                        <span
-                          className={`px-2 py-1 rounded-full text-[10px] font-bold ${
-                            account.account_status ===
-                            'Locked'
-                              ? 'bg-rose-100 text-rose-800'
-                              : account.account_status ===
-                                'Verified'
-                              ? 'bg-emerald-100 text-emerald-800'
-                              : 'bg-amber-100 text-amber-800'
-                          }`}
-                        >
-                          {account.account_status ||
-                            'Active'}
-                        </span>
+                        
                       </div>
 
                       <p className="text-xs text-slate-600 mt-1">
