@@ -753,22 +753,7 @@ export default function PropertyOwnerAccountsSection() {
 
                       {/* NOTICE */}
 
-                      <button
-                        onClick={() =>
-                          setOpenAccount(
-                            openAccount ===
-                              account.id
-                              ? null
-                              : account.id
-                          )
-                        }
-                        className="bg-slate-800 hover:bg-slate-900 text-white px-3 py-2 rounded-lg text-xs font-bold"
-                      >
-                        {openAccount ===
-                        account.id
-                          ? 'Close Notice'
-                          : 'Send Notice'}
-                      </button>
+                      
                     </div>
                   </div>
 
