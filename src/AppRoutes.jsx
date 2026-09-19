@@ -44,7 +44,8 @@ export default function AppRoutes() {
     /user-login while Supabase is still restoring the
     existing session after a page refresh.
   */
-  const [propertyOwnerAuthLoading, setPropertyOwnerAuthLoading] = useState(true);
+  const [propertyOwnerAuthLoading, setPropertyOwnerAuthLoading] =
+    useState(true);
 
   /* =======================================================
      SUPABASE AUTH SESSION
@@ -597,10 +598,6 @@ export default function AppRoutes() {
 
         {/* =================================================
             USER DASHBOARD
-
-            IMPORTANT:
-            Do NOT redirect until Supabase has finished
-            restoring the session after refresh.
         ================================================= */}
 
         <Route
