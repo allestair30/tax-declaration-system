@@ -798,23 +798,7 @@ export default function AdminDashboard({
             </p>
           </div>
 
-          <button
-            onClick={() => {
-              if (
-                typeof onGoToTaxFormManager ===
-                'function'
-              ) {
-                onGoToTaxFormManager();
-              } else {
-                setActivePage(
-                  'formManager'
-                );
-              }
-            }}
-            className="bg-blue-900 hover:bg-blue-800 text-white text-xs font-semibold px-4 py-2 rounded-xl transition shadow"
-          >
-            Manage Approved Tax Forms →
-          </button>
+         
         </header>
 
         <main className="flex-grow p-8 max-w-7xl w-full mx-auto space-y-6">

@@ -11,6 +11,7 @@ import {
   submitTaxDeclaration,
   uploadTaxDeclarationImage,
   updateTaxDeclaration,
+  deleteTaxDeclaration,
 } from '../assets/services/api';
 
 /* =========================================================
@@ -1495,8 +1496,22 @@ export default function TaxFormManager({
     setLoading(true); 
  
     try { 
+      /*
+       * FIX: `updateVerificationStatus` is a narrow endpoint
+       * meant only for approving/rejecting a record's status.
+       * It was never meant to persist full form edits (name,
+       * TD No., addresses, assessment rows, etc.), so those
+       * edits looked saved in the UI but were silently dropped
+       * by the backend and reappeared as the old values on
+       * refresh.
+       *
+       * `updateTaxDeclaration` is the general-purpose update
+       * endpoint (already used above for Manual Registry
+       * document metadata) and actually persists the full
+       * record.
+       */
       const response = 
-        await updateVerificationStatus( 
+        await updateTaxDeclaration( 
           recordId, 
           updatedRecord 
         ); 
@@ -1572,20 +1587,19 @@ export default function TaxFormManager({
   ) => { 
     const recordId = 
       getRecordId(record); 
- 
+
     const recordTd = 
       record.td_no || 
       recordId || 
       ''; 
- 
+
     if (!recordId) { 
       alert( 
-        'This tax record does not have a valid ID.' 
+        'This tax record does not have a valid database ID.' 
       ); 
- 
       return; 
     } 
- 
+
     if ( 
       !window.confirm( 
         `Are you sure you want to permanently delete tax record ${recordTd}? This cannot be undone.` 
@@ -1593,53 +1607,55 @@ export default function TaxFormManager({
     ) { 
       return; 
     } 
- 
-    if ( 
-      typeof onDeleteRecord === 
-      'function' 
-    ) { 
-      try { 
-        setLoading(true); 
- 
-        await onDeleteRecord( 
-          recordId 
-        ); 
- 
-        /* 
-         * Only remove from Manager after the parent 
-         * confirms the permanent deletion. 
-         */ 
-        setManagerRecords((previous) => 
-          previous.filter( 
-            (item) => 
-              String( 
-                getRecordId(item) 
-              ) !== 
-              String(recordId) 
-          ) 
-        ); 
-      } catch (error) { 
-        console.error( 
-          'Error deleting record:', 
-          error 
-        ); 
- 
-        alert( 
-          error?.message || 
-            'Failed to permanently delete the record.' 
-        ); 
-      } finally { 
-        setLoading(false); 
+
+    setLoading(true); 
+
+    try { 
+      /* 
+       * IMPORTANT: Delete directly from the backend database. 
+       * The parent Dashboard callback is NOT used as the 
+       * deletion operation because that callback only hides 
+       * a card locally. 
+       */ 
+      await deleteTaxDeclaration(recordId); 
+
+      /* Remove the record from the current Manager view only 
+         AFTER the backend confirms deletion. */ 
+      setManagerRecords((previous) => 
+        previous.filter( 
+          (item) => 
+            String(getRecordId(item)) !== 
+            String(recordId) 
+        ) 
+      ); 
+
+      /* Keep the parent UI synchronized after the database 
+         deletion. The parent must not perform another delete. */ 
+      if ( 
+        typeof onDeleteRecord === 
+        'function' 
+      ) { 
+        await onDeleteRecord(recordId); 
       } 
- 
-      return; 
+
+      alert( 
+        `Tax record ${recordTd} was permanently deleted from the database.` 
+      ); 
+    } catch (error) { 
+      console.error( 
+        'Permanent tax record deletion failed:', 
+        error 
+      ); 
+
+      alert( 
+        error?.message || 
+          'Failed to permanently delete the tax record from the database.' 
+      ); 
+    } finally { 
+      setLoading(false); 
     } 
- 
-    alert( 
-      'Delete operation is not connected to the database yet.' 
-    ); 
   }; 
- 
+
   /* ======================================================= 
      IMAGE VIEWER 
   ======================================================= */ 
@@ -3962,4 +3978,4 @@ export default function TaxFormManager({
  
     </div> 
   ); 
-}  
+}
