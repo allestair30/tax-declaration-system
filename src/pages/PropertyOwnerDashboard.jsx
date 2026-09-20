@@ -11,6 +11,12 @@ import { jsPDF } from 'jspdf';
 // Remembers which request modal is open so a page refresh keeps it open.
 const OPEN_REQUEST_KEY = 'po_dashboard_open_request';
 
+// Notification storage (per user). The status map remembers the last status
+// we saw for each request so we can tell when the Assessor approved/rejected one.
+const STATUS_KEY_PREFIX = 'po_request_status_';
+const NOTIF_KEY_PREFIX = 'po_notifications_';
+const MAX_NOTIFICATIONS = 30;
+
 // Columns where the property image may be stored (first one that has a value is used).
 const IMAGE_FIELDS = ['property_image', 'document_image', 'image_url'];
 
@@ -201,6 +207,67 @@ const canAccessRequest = (request) => isReleasedRequest(request);
 const canEditRequest = (request) => isReleasedRequest(request);
 
 // ---------------------------------------------------------
+// Notification helpers
+// "approved" = the Assessor verified and released the request.
+// "rejected" = the Assessor rejected the request.
+// Anything else (Pending, ...) does not trigger a notification.
+// ---------------------------------------------------------
+
+const getDecision = (request) => {
+  const status = normalizeStatus(request);
+
+  if (status === 'released' || status === 'approved') return 'approved';
+  if (status === 'rejected') return 'rejected';
+
+  return null;
+};
+
+const buildNotification = (request, decision) => {
+  const tdLabel = request.td_no ? ` (TD No. ${request.td_no})` : '';
+
+  if (decision === 'approved') {
+    return {
+      id: `${request.id}-approved-${Date.now()}`,
+      requestId: request.id,
+      type: 'approved',
+      title: 'Request approved',
+      message: `Your Tax Declaration request${tdLabel} was approved and released by the Assessor. You can now view, edit and export it.`,
+      time: new Date().toISOString(),
+      read: false
+    };
+  }
+
+  return {
+    id: `${request.id}-rejected-${Date.now()}`,
+    requestId: request.id,
+    type: 'rejected',
+    title: 'Request rejected',
+    message:
+      `Your Tax Declaration request${tdLabel} was rejected by the Assessor.` +
+      (request.admin_notes ? ` Reason: ${request.admin_notes}` : ''),
+    time: new Date().toISOString(),
+    read: false
+  };
+};
+
+const readStorage = (key, fallback) => {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+};
+
+const writeStorage = (key, value) => {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // ignore storage errors
+  }
+};
+
+// ---------------------------------------------------------
 // Session helper
 // A refresh can briefly return an error or an empty session
 // while Supabase restores / refreshes the token. Retry a few
@@ -245,6 +312,22 @@ export default function PropertyOwnerDashboard() {
   const [error, setError] = useState('');
 
   // =========================================================
+  // NOTIFICATIONS (request approved / rejected)
+  // =========================================================
+
+  const [notifications, setNotifications] = useState([]);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [toast, setToast] = useState(null);
+
+  // =========================================================
+  // DELETE REQUEST
+  // =========================================================
+
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+
+  // =========================================================
   // REQUEST DETAILS MODAL
   // =========================================================
 
@@ -271,6 +354,118 @@ export default function PropertyOwnerDashboard() {
   const loggingOutRef = useRef(false);
 
   const userId = session?.user?.id;
+
+  // =========================================================
+  // NOTIFICATION LOGIC
+  // =========================================================
+
+  const persistNotifications = (uid, list) => {
+    if (!uid) return;
+    writeStorage(`${NOTIF_KEY_PREFIX}${uid}`, list);
+  };
+
+  const addNotifications = (uid, fresh) => {
+    if (!fresh.length) return;
+
+    setNotifications((previous) => {
+      const next = [...fresh, ...previous].slice(0, MAX_NOTIFICATIONS);
+      persistNotifications(uid, next);
+      return next;
+    });
+
+    const first = fresh[0];
+
+    setToast({
+      type: fresh.length === 1 ? first.type : 'info',
+      title: fresh.length === 1 ? first.title : 'New request updates',
+      message:
+        fresh.length === 1
+          ? first.message
+          : `You have ${fresh.length} new updates on your Tax Declaration requests.`
+    });
+  };
+
+  // Compares the latest request statuses with the last ones we saw.
+  // The first time ever (no saved map) it only records the current statuses.
+  const processStatusChanges = (uid, requestRows) => {
+    const statusKey = `${STATUS_KEY_PREFIX}${uid}`;
+    const stored = readStorage(statusKey, null);
+
+    const current = {};
+
+    requestRows.forEach((r) => {
+      current[r.id] = normalizeStatus(r);
+    });
+
+    if (stored) {
+      const fresh = [];
+
+      requestRows.forEach((r) => {
+        const decision = getDecision(r);
+
+        if (!decision) return;
+
+        const before = stored[r.id] || 'pending';
+
+        if (before !== current[r.id]) {
+          fresh.push(buildNotification(r, decision));
+        }
+      });
+
+      addNotifications(uid, fresh);
+    }
+
+    writeStorage(statusKey, current);
+  };
+
+  const markAllNotificationsRead = () => {
+    const next = notifications.map((n) => ({ ...n, read: true }));
+    setNotifications(next);
+    persistNotifications(session?.user?.id, next);
+  };
+
+  const clearNotifications = () => {
+    setNotifications([]);
+    persistNotifications(session?.user?.id, []);
+  };
+
+  const openNotification = (notification) => {
+    const next = notifications.map((n) =>
+      n.id === notification.id ? { ...n, read: true } : n
+    );
+
+    setNotifications(next);
+    persistNotifications(session?.user?.id, next);
+    setShowNotifications(false);
+
+    const request = requests.find((r) => r.id === notification.requestId);
+
+    if (
+      notification.type === 'approved' &&
+      request &&
+      canAccessRequest(request)
+    ) {
+      viewRequestDetails(request);
+      return;
+    }
+
+    const section = document.getElementById('requests-section');
+
+    if (section) {
+      section.scrollIntoView({ behavior: 'smooth' });
+    }
+  };
+
+  const unreadCount = notifications.filter((n) => !n.read).length;
+
+  // Auto-hide the toast
+  useEffect(() => {
+    if (!toast) return undefined;
+
+    const timer = setTimeout(() => setToast(null), 9000);
+
+    return () => clearTimeout(timer);
+  }, [toast]);
 
   // =========================================================
   // DATA LOADING
@@ -324,6 +519,9 @@ export default function PropertyOwnerDashboard() {
       setRecords(recordRows);
       setRequests(requestRows);
 
+      // Notify about requests approved / rejected since the last visit
+      processStatusChanges(uid, requestRows);
+
       return { recordRows, requestRows };
     } catch (err) {
       setError(
@@ -343,6 +541,9 @@ export default function PropertyOwnerDashboard() {
 
       setRecords(recordRows);
       setRequests(requestRows);
+
+      // Notify when the Assessor approves / rejects a request
+      processStatusChanges(uid, requestRows);
 
       setSelectedRequest((prev) =>
         prev
@@ -411,6 +612,9 @@ export default function PropertyOwnerDashboard() {
       }
 
       setSession(initialSession);
+
+      // Restore saved notifications before the first load so new ones are added on top
+      setNotifications(readStorage(`${NOTIF_KEY_PREFIX}${user.id}`, []));
 
       const { requestRows } = await loadPortal(user.id);
 
@@ -1021,6 +1225,84 @@ export default function PropertyOwnerDashboard() {
       );
     } finally {
       setSavingDetails(false);
+    }
+  };
+
+  // =========================================================
+  // DELETE REQUEST
+  // Removes the request row from tax_declaration_requests.
+  // The submitted Tax Declaration record itself is not deleted.
+  // =========================================================
+
+  const askDeleteRequest = (request) => {
+    setDeleteError('');
+    setDeleteTarget(request);
+  };
+
+  const cancelDeleteRequest = () => {
+    if (deleting) return;
+
+    setDeleteTarget(null);
+    setDeleteError('');
+  };
+
+  const deleteRequest = async () => {
+    if (!deleteTarget) return;
+
+    const uid = session?.user?.id;
+
+    if (!uid) {
+      setDeleteError('Your session has expired. Please log in again.');
+      return;
+    }
+
+    setDeleting(true);
+    setDeleteError('');
+
+    try {
+      const { data, error: deleteRequestError } = await supabase
+        .from('tax_declaration_requests')
+        .delete()
+        .eq('id', deleteTarget.id)
+        .eq('submitted_by', uid)
+        .select('id');
+
+      if (deleteRequestError) throw deleteRequestError;
+
+      // Row Level Security can silently delete nothing - treat that as a failure
+      if (!data || data.length === 0) {
+        throw new Error(
+          'The request could not be deleted. Deleting requests may not be allowed for your account.'
+        );
+      }
+
+      const deletedId = deleteTarget.id;
+
+      setRequests((previous) =>
+        previous.filter((r) => r.id !== deletedId)
+      );
+
+      // Remove notifications that belong to the deleted request
+      setNotifications((previous) => {
+        const next = previous.filter((n) => n.requestId !== deletedId);
+        persistNotifications(uid, next);
+        return next;
+      });
+
+      // Close the details modal if it was showing this request
+      if (selectedRequest?.id === deletedId) {
+        closeDetails();
+      }
+
+      setDeleteTarget(null);
+      setNotice('Tax Declaration request was deleted successfully.');
+    } catch (err) {
+      setDeleteError(
+        err?.message ||
+        'Unable to delete the Tax Declaration request.'
+      );
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -2099,6 +2381,55 @@ export default function PropertyOwnerDashboard() {
     <div className="min-h-screen bg-slate-100">
 
       {/* =====================================================
+          TOAST (request approved / rejected)
+      ===================================================== */}
+
+      {toast && (
+        <div className="fixed top-4 right-4 z-[80] w-[calc(100%-2rem)] max-w-sm">
+
+          <div
+            className={`rounded-xl shadow-2xl border p-4 flex items-start gap-3 ${
+              toast.type === 'approved'
+                ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
+                : toast.type === 'rejected'
+                  ? 'bg-rose-50 border-rose-300 text-rose-900'
+                  : 'bg-blue-50 border-blue-300 text-blue-900'
+            }`}
+            role="status"
+          >
+
+            <span className="text-lg leading-none">
+              {toast.type === 'approved'
+                ? '✅'
+                : toast.type === 'rejected'
+                  ? '⛔'
+                  : '🔔'}
+            </span>
+
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-bold">
+                {toast.title}
+              </p>
+
+              <p className="text-xs mt-0.5 break-words">
+                {toast.message}
+              </p>
+            </div>
+
+            <button
+              onClick={() => setToast(null)}
+              className="font-bold text-lg leading-none"
+              aria-label="Dismiss notification"
+            >
+              ×
+            </button>
+
+          </div>
+
+        </div>
+      )}
+
+      {/* =====================================================
           HEADER
       ===================================================== */}
 
@@ -2115,12 +2446,137 @@ export default function PropertyOwnerDashboard() {
             </h1>
           </div>
 
-          <button
-            onClick={logout}
-            className="text-xs font-bold bg-white/10 hover:bg-white/20 border border-white/20 px-4 py-2 rounded-lg"
-          >
-            Logout
-          </button>
+          <div className="flex items-center gap-2">
+
+            {/* NOTIFICATION BELL */}
+
+            <div className="relative">
+
+              <button
+                onClick={() => setShowNotifications((v) => !v)}
+                className="relative text-xs font-bold bg-white/10 hover:bg-white/20 border border-white/20 px-3 py-2 rounded-lg"
+                aria-label="Notifications"
+              >
+                🔔
+
+                {unreadCount > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center">
+                    {unreadCount > 9 ? '9+' : unreadCount}
+                  </span>
+                )}
+              </button>
+
+              {showNotifications && (
+                <>
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => setShowNotifications(false)}
+                  />
+
+                  <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-white text-slate-900 rounded-xl shadow-2xl border border-slate-200 z-50 overflow-hidden">
+
+                    <div className="p-3 border-b border-slate-200 flex items-center justify-between">
+
+                      <p className="text-sm font-bold">
+                        Notifications
+                      </p>
+
+                      <div className="flex items-center gap-3">
+
+                        {unreadCount > 0 && (
+                          <button
+                            onClick={markAllNotificationsRead}
+                            className="text-[11px] font-bold text-blue-800 hover:underline"
+                          >
+                            Mark all read
+                          </button>
+                        )}
+
+                        {notifications.length > 0 && (
+                          <button
+                            onClick={clearNotifications}
+                            className="text-[11px] font-bold text-slate-500 hover:underline"
+                          >
+                            Clear
+                          </button>
+                        )}
+
+                      </div>
+
+                    </div>
+
+                    <div className="max-h-96 overflow-y-auto">
+
+                      {notifications.length === 0 ? (
+
+                        <p className="p-6 text-center text-xs text-slate-500">
+                          No notifications yet. You will be notified when the Assessor approves or rejects a request.
+                        </p>
+
+                      ) : (
+
+                        notifications.map((n) => (
+
+                          <button
+                            key={n.id}
+                            onClick={() => openNotification(n)}
+                            className={`w-full text-left p-3 border-b border-slate-100 flex items-start gap-3 hover:bg-slate-50 ${
+                              n.read ? '' : 'bg-blue-50/60'
+                            }`}
+                          >
+
+                            <span className="text-base leading-none mt-0.5">
+                              {n.type === 'approved' ? '✅' : '⛔'}
+                            </span>
+
+                            <span className="flex-1 min-w-0">
+
+                              <span
+                                className={`block text-xs font-bold ${
+                                  n.type === 'approved'
+                                    ? 'text-emerald-800'
+                                    : 'text-rose-800'
+                                }`}
+                              >
+                                {n.title}
+                              </span>
+
+                              <span className="block text-xs text-slate-700 mt-0.5 break-words">
+                                {n.message}
+                              </span>
+
+                              <span className="block text-[10px] text-slate-400 mt-1">
+                                {new Date(n.time).toLocaleString()}
+                              </span>
+
+                            </span>
+
+                            {!n.read && (
+                              <span className="w-2 h-2 rounded-full bg-blue-600 mt-1.5 shrink-0" />
+                            )}
+
+                          </button>
+
+                        ))
+
+                      )}
+
+                    </div>
+
+                  </div>
+                </>
+              )}
+
+            </div>
+
+            <button
+              onClick={logout}
+              className="text-xs font-bold bg-white/10 hover:bg-white/20 border border-white/20 px-4 py-2 rounded-lg"
+            >
+              Logout
+            </button>
+
+          </div>
 
         </div>
       </header>
@@ -2309,6 +2765,16 @@ export default function PropertyOwnerDashboard() {
                     const released = canAccessRequest(r);
                     const rejected = normalizeStatus(r) === 'rejected';
 
+                    const deleteButton = (
+                      <button
+                        type="button"
+                        onClick={() => askDeleteRequest(r)}
+                        className="bg-rose-600 hover:bg-rose-500 text-white px-3 py-2 rounded-lg text-xs font-bold"
+                      >
+                        🗑 Delete
+                      </button>
+                    );
+
                     return (
 
                       <tr
@@ -2404,32 +2870,46 @@ export default function PropertyOwnerDashboard() {
                                 📄 Export PDF
                               </button>
 
+                              {deleteButton}
+
                             </div>
 
                           ) : rejected ? (
 
-                            <div className="mx-auto max-w-[240px] flex items-start gap-2 text-left bg-rose-50 border border-rose-200 text-rose-800 rounded-lg px-3 py-2 text-[11px] font-semibold">
+                            <div className="flex flex-col items-center gap-2">
 
-                              <span>⛔</span>
+                              <div className="mx-auto max-w-[240px] flex items-start gap-2 text-left bg-rose-50 border border-rose-200 text-rose-800 rounded-lg px-3 py-2 text-[11px] font-semibold">
 
-                              <span>
-                                This request was rejected by the Assessor.
-                                The document is not available.
-                              </span>
+                                <span>⛔</span>
+
+                                <span>
+                                  This request was rejected by the Assessor.
+                                  The document is not available.
+                                </span>
+
+                              </div>
+
+                              {deleteButton}
 
                             </div>
 
                           ) : (
 
-                            <div className="mx-auto max-w-[240px] flex items-start gap-2 text-left bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-3 py-2 text-[11px] font-semibold">
+                            <div className="flex flex-col items-center gap-2">
 
-                              <span>⏳</span>
+                              <div className="mx-auto max-w-[240px] flex items-start gap-2 text-left bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-3 py-2 text-[11px] font-semibold">
 
-                              <span>
-                                Pending — this request must be verified by
-                                the Assessor first before you can access
-                                the document.
-                              </span>
+                                <span>⏳</span>
+
+                                <span>
+                                  Pending — this request must be verified by
+                                  the Assessor first before you can access
+                                  the document.
+                                </span>
+
+                              </div>
+
+                              {deleteButton}
 
                             </div>
 
@@ -2673,6 +3153,15 @@ export default function PropertyOwnerDashboard() {
                     className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg text-xs font-bold"
                   >
                     📄 Export PDF
+                  </button>
+
+                  <button
+                    onClick={() =>
+                      askDeleteRequest(selectedRequest)
+                    }
+                    className="bg-rose-600 hover:bg-rose-500 text-white px-4 py-2 rounded-lg text-xs font-bold"
+                  >
+                    🗑 Delete
                   </button>
 
                   <button
@@ -3132,6 +3621,70 @@ export default function PropertyOwnerDashboard() {
                 </div>
 
               )}
+
+            </div>
+
+          </div>
+
+        </div>
+
+      )}
+
+      {/* =====================================================
+          DELETE REQUEST CONFIRMATION
+      ===================================================== */}
+
+      {deleteTarget && (
+
+        <div className="fixed inset-0 z-[70] bg-black/60 flex items-center justify-center p-4">
+
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+
+            <div className="p-5 border-b border-slate-200">
+
+              <h3 className="font-bold text-slate-900">
+                🗑 Delete this request?
+              </h3>
+
+            </div>
+
+            <div className="p-5 space-y-3">
+
+              <p className="text-sm text-slate-700">
+                You are about to delete the request
+                {deleteTarget.td_no ? ` for TD No. ${deleteTarget.td_no}` : ''}
+                . This cannot be undone.
+              </p>
+
+              <p className="text-xs text-slate-500">
+                Only the request is removed. Your submitted Tax Declaration record is not deleted.
+              </p>
+
+              {deleteError && (
+                <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-xs">
+                  {deleteError}
+                </div>
+              )}
+
+            </div>
+
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end gap-2">
+
+              <button
+                onClick={cancelDeleteRequest}
+                disabled={deleting}
+                className="bg-slate-600 hover:bg-slate-500 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-xs font-bold"
+              >
+                Cancel
+              </button>
+
+              <button
+                onClick={deleteRequest}
+                disabled={deleting}
+                className="bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white px-5 py-2 rounded-lg text-xs font-bold"
+              >
+                {deleting ? 'Deleting...' : 'Delete request'}
+              </button>
 
             </div>
 
