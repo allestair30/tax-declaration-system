@@ -1,8 +1,15 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../assets/services/supabaseClient';
 
 const BUCKET = 'tax-declarations';
+
+/*
+ * Formats the Supabase numeric id (1, 2, 3 ...) as a
+ * zero-padded request number (001, 002, 003 ...).
+ * The database id itself stays a plain number.
+ */
+const formatRequestId = (id) => String(id).padStart(3, '0');
 
 async function uploadRequestFile(file, userId, label) {
   if (!file) return null;
@@ -48,29 +55,275 @@ function FileField({
   required,
   value,
   onChange,
+  onRemove,
   accept = 'image/*,.pdf',
 }) {
-  return (
-    <label className="block">
-      <span className="block text-xs font-bold uppercase tracking-wide text-slate-700">
-        {label}
-        {required ? ' *' : ' (Optional)'}
-      </span>
+  const inputRef = useRef(null);
 
-      <input
-        type="file"
-        accept={accept}
-        required={required}
-        onChange={onChange}
-        className="mt-2 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs"
-      />
+  const [previewUrl, setPreviewUrl] = useState('');
+
+  const [viewerOpen, setViewerOpen] = useState(false);
+
+  /*
+   * Create a temporary local URL for the selected file so
+   * it can be previewed and opened before submitting.
+   * The URL is released when the file changes or is removed.
+   */
+  useEffect(() => {
+    if (!value) {
+      setPreviewUrl('');
+      return undefined;
+    }
+
+    const url = URL.createObjectURL(value);
+
+    setPreviewUrl(url);
+
+    return () => {
+      URL.revokeObjectURL(url);
+    };
+  }, [value]);
+
+  /*
+   * Close the viewer with the Escape key.
+   */
+  useEffect(() => {
+    if (!viewerOpen) return undefined;
+
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        setViewerOpen(false);
+      }
+    };
+
+    window.addEventListener('keydown', onKey);
+
+    return () => {
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [viewerOpen]);
+
+  const isImage =
+    !!value && value.type.startsWith('image/');
+
+  const isPdf =
+    !!value && value.type === 'application/pdf';
+
+  const removeFile = () => {
+    setViewerOpen(false);
+
+    if (inputRef.current) {
+      inputRef.current.value = '';
+    }
+
+    if (onRemove) {
+      onRemove();
+    }
+  };
+
+  return (
+    <div>
+      <label className="block">
+        <span className="block text-xs font-bold uppercase tracking-wide text-slate-700">
+          {label}
+          {required ? ' *' : ' (Optional)'}
+        </span>
+
+        <input
+          ref={inputRef}
+          type="file"
+          accept={accept}
+          required={required}
+          onChange={onChange}
+          className="mt-2 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs"
+        />
+
+        {value && (
+          <span className="mt-1 block text-[10px] text-emerald-700">
+            ✓ Document uploaded
+          </span>
+        )}
+      </label>
+
+      {/* ===================================================
+          VIEW / CHANGE / REMOVE SELECTED DOCUMENT
+      =================================================== */}
 
       {value && (
-        <span className="mt-1 block text-[10px] text-emerald-700">
-          ✓ Document uploaded
-        </span>
+        <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
+          {/* Click the preview to view it larger */}
+
+          <button
+            type="button"
+            onClick={() =>
+              setViewerOpen(true)
+            }
+            title="Click to view"
+            className="h-32 w-full overflow-hidden rounded-md border border-slate-200 bg-white flex items-center justify-center cursor-zoom-in"
+          >
+            {isImage && previewUrl ? (
+              <img
+                src={previewUrl}
+                alt={label}
+                className="h-full w-full object-contain"
+              />
+            ) : (
+              <div className="text-center">
+                <div className="text-3xl">
+                  📄
+                </div>
+
+                <p className="mt-1 text-[10px] text-slate-500">
+                  {isPdf
+                    ? 'PDF document'
+                    : 'Document file'}
+                </p>
+              </div>
+            )}
+          </button>
+
+          <p
+            className="mt-2 truncate text-[10px] text-slate-600"
+            title={value.name}
+          >
+            {value.name} ·{' '}
+            {Math.max(
+              1,
+              Math.round(value.size / 1024)
+            )}{' '}
+            KB
+          </p>
+
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() =>
+                setViewerOpen(true)
+              }
+              className="bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 px-3 py-1.5 rounded-lg text-[10px] font-bold"
+            >
+              View
+            </button>
+
+            <button
+              type="button"
+              onClick={() =>
+                inputRef.current?.click()
+              }
+              className="bg-slate-800 hover:bg-slate-700 text-white px-3 py-1.5 rounded-lg text-[10px] font-bold"
+            >
+              Change
+            </button>
+
+            <button
+              type="button"
+              onClick={removeFile}
+              className="bg-rose-600 hover:bg-rose-700 text-white px-3 py-1.5 rounded-lg text-[10px] font-bold"
+            >
+              Remove
+            </button>
+          </div>
+        </div>
       )}
-    </label>
+
+      {/* ===================================================
+          FULL-SIZE VIEWER
+      =================================================== */}
+
+      {value && viewerOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+          onClick={() =>
+            setViewerOpen(false)
+          }
+        >
+          <div
+            className="w-full max-w-4xl max-h-[92vh] flex flex-col rounded-2xl bg-white shadow-xl overflow-hidden"
+            onClick={(e) =>
+              e.stopPropagation()
+            }
+          >
+            <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+              <div className="min-w-0">
+                <p className="text-xs font-bold uppercase tracking-wide text-slate-700">
+                  {label}
+                </p>
+
+                <p
+                  className="truncate text-[10px] text-slate-500"
+                  title={value.name}
+                >
+                  {value.name}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() =>
+                  setViewerOpen(false)
+                }
+                className="bg-slate-200 hover:bg-slate-300 text-slate-700 px-3 py-1.5 rounded-lg text-[10px] font-bold"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-auto bg-slate-100 p-3 flex items-center justify-center">
+              {isImage && previewUrl && (
+                <img
+                  src={previewUrl}
+                  alt={label}
+                  className="max-h-[70vh] max-w-full object-contain"
+                />
+              )}
+
+              {isPdf && previewUrl && (
+                <iframe
+                  src={previewUrl}
+                  title={label}
+                  className="w-full h-[70vh] rounded-lg border border-slate-200 bg-white"
+                />
+              )}
+
+              {!isImage && !isPdf && (
+                <p className="text-xs text-slate-500">
+                  Preview is not available for this file.
+                </p>
+              )}
+            </div>
+
+            <div className="flex flex-wrap justify-end gap-2 border-t border-slate-200 px-4 py-3">
+              <a
+                href={previewUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 px-3 py-1.5 rounded-lg text-[10px] font-bold"
+              >
+                Open in New Tab ↗
+              </a>
+
+              <button
+                type="button"
+                onClick={() =>
+                  inputRef.current?.click()
+                }
+                className="bg-slate-800 hover:bg-slate-700 text-white px-3 py-1.5 rounded-lg text-[10px] font-bold"
+              >
+                Change
+              </button>
+
+              <button
+                type="button"
+                onClick={removeFile}
+                className="bg-rose-600 hover:bg-rose-700 text-white px-3 py-1.5 rounded-lg text-[10px] font-bold"
+              >
+                Remove
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -220,7 +473,7 @@ export default function RequestTaxDeclarationForm() {
       !files.supportingDocument
     ) {
       setError(
-        'Valid Government ID, Proof of Ownership, and Tax Declaration Supporting Document Image are required.'
+        'Valid Government ID, Proof of Ownership, and PSA BIRTH are required.'
       );
 
       return;
@@ -272,7 +525,7 @@ export default function RequestTaxDeclarationForm() {
         uploadRequestFile(
           files.supportingDocument,
           userId,
-          'Tax Declaration Supporting Document Image'
+          'PSA BIRTH'
         ),
 
         files.authorizationLetter
@@ -358,7 +611,7 @@ export default function RequestTaxDeclarationForm() {
 
       setMessage(
         `Request ${
-          data?.id ? `#${data.id}` : ''
+          data?.id ? `#${formatRequestId(data.id)}` : ''
         } submitted successfully. Please wait for the Assessor's verification and release.`
       );
 
@@ -530,6 +783,12 @@ export default function RequestTaxDeclarationForm() {
                     e.target.files?.[0] || null,
                 }))
               }
+              onRemove={() =>
+                setFiles((p) => ({
+                  ...p,
+                  validGovernmentId: null,
+                }))
+              }
             />
 
             <FileField
@@ -543,10 +802,16 @@ export default function RequestTaxDeclarationForm() {
                     e.target.files?.[0] || null,
                 }))
               }
+              onRemove={() =>
+                setFiles((p) => ({
+                  ...p,
+                  proofOfOwnership: null,
+                }))
+              }
             />
 
             <FileField
-              label="Tax Declaration Supporting Document Image"
+              label="PSA BIRTH"
               required
               value={files.supportingDocument}
               onChange={(e) =>
@@ -554,6 +819,12 @@ export default function RequestTaxDeclarationForm() {
                   ...p,
                   supportingDocument:
                     e.target.files?.[0] || null,
+                }))
+              }
+              onRemove={() =>
+                setFiles((p) => ({
+                  ...p,
+                  supportingDocument: null,
                 }))
               }
             />
@@ -566,6 +837,12 @@ export default function RequestTaxDeclarationForm() {
                   ...p,
                   authorizationLetter:
                     e.target.files?.[0] || null,
+                }))
+              }
+              onRemove={() =>
+                setFiles((p) => ({
+                  ...p,
+                  authorizationLetter: null,
                 }))
               }
             />

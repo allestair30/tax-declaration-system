@@ -560,6 +560,80 @@ export default function PropertyOwnerAccountsSection() {
   };
 
   /* =========================================================
+     DELETE TAX DECLARATION REQUEST
+
+     Permanently removes the request from
+     tax_declaration_requests.
+
+     .select() is used so we can tell when Supabase
+     deleted nothing (for example, when a Row Level
+     Security policy blocks the delete).
+  ========================================================= */
+
+  const deleteRequest = async (
+    request
+  ) => {
+    if (
+      !window.confirm(
+        `Permanently delete Request #${request.id} (TD ${
+          request.td_no || '—'
+        })? This cannot be undone.`
+      )
+    ) {
+      return;
+    }
+
+    setError('');
+    setMessage('');
+
+    const {
+      data: deletedRows,
+      error: deleteError,
+    } = await supabase
+      .from('tax_declaration_requests')
+      .delete()
+      .eq(
+        'id',
+        request.id
+      )
+      .select();
+
+    if (deleteError) {
+      console.error(
+        '[REQUEST DELETE ERROR]',
+        deleteError
+      );
+
+      setError(
+        deleteError.message
+      );
+
+      return;
+    }
+
+    if (
+      !deletedRows ||
+      deletedRows.length === 0
+    ) {
+      setError(
+        `Request #${request.id} could not be deleted. Make sure your admin account has permission to delete Tax Declaration Requests.`
+      );
+
+      return;
+    }
+
+    setRequests((items) =>
+      items.filter(
+        (r) => r.id !== request.id
+      )
+    );
+
+    setMessage(
+      `Request #${request.id} was permanently deleted.`
+    );
+  };
+
+  /* =========================================================
      PENDING REQUESTS
   ========================================================= */
 
@@ -835,6 +909,9 @@ export default function PropertyOwnerAccountsSection() {
                   onVerify={
                     verifyRequest
                   }
+                  onDelete={
+                    deleteRequest
+                  }
                 />
               )
             )}
@@ -852,6 +929,7 @@ export default function PropertyOwnerAccountsSection() {
 function RequestVerificationCard({
   request,
   onVerify,
+  onDelete,
 }) {
   const [notes, setNotes] =
     useState(
@@ -1001,16 +1079,35 @@ function RequestVerificationCard({
           </span>
         </div>
 
-        <button
-          onClick={
-            openDocuments
-          }
-          className="self-start bg-slate-800 hover:bg-slate-700 text-white px-3 py-2 rounded-lg text-xs font-bold"
-        >
-          {open
-            ? 'Hide Documents'
-            : 'Open Documents'}
-        </button>
+        {/* =================================================
+            REQUEST ACTIONS
+        ================================================= */}
+
+        <div className="flex flex-wrap gap-2 self-start">
+          <button
+            onClick={
+              openDocuments
+            }
+            className="bg-slate-800 hover:bg-slate-700 text-white px-3 py-2 rounded-lg text-xs font-bold"
+          >
+            {open
+              ? 'Hide Documents'
+              : 'Open Documents'}
+          </button>
+
+          {/* DELETE REQUEST */}
+
+          <button
+            onClick={() =>
+              onDelete(
+                request
+              )
+            }
+            className="bg-rose-600 hover:bg-rose-700 text-white px-3 py-2 rounded-lg text-xs font-bold"
+          >
+            Delete
+          </button>
+        </div>
       </div>
 
       {/* =====================================================
