@@ -383,6 +383,7 @@ export default function AdminDashboard({
     try {
       if (
         typeof deleteTaxRecord === 'function'
+        
       ) {
         await deleteTaxRecord(
           targetIdOrTdNo
@@ -1854,21 +1855,7 @@ export default function AdminDashboard({
 
                   <div className="flex justify-between items-center pt-3 border-t">
                     <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        disabled={
-                          isUpdating
-                        }
-                        onClick={() =>
-                          handleDeleteFromDashboardOnly(
-                            selectedRecord.id ||
-                              selectedRecord.td_no
-                          )
-                        }
-                        className="bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 px-3 py-1.5 rounded text-xs font-semibold transition"
-                      >
-                        Delete (Dashboard & Notice Only)
-                      </button>
+                      
 
                       <button
                         type="button"

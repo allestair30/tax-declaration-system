@@ -1055,13 +1055,7 @@ function RequestVerificationCard({
               '—'}
           </p>
 
-          <p className="text-xs mt-1 text-slate-500">
-            <strong>
-              Requester ID:
-            </strong>{' '}
-            {request.requester_id ||
-              '—'}
-          </p>
+          
 
           <span
             className={`inline-block mt-2 px-2 py-1 rounded-full text-[10px] font-bold ${
