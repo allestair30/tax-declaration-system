@@ -126,6 +126,25 @@ const STORAGE_BUCKET =
   import.meta.env.VITE_SUPABASE_STORAGE_BUCKET ||
   'tax-declarations';
 
+/* =========================================================
+   SAN FERNANDO, ROMBLON BARANGAYS
+========================================================= */
+
+const SAN_FERNANDO_ROMBLON_BARANGAYS = [
+  'Agtiwa',
+  'Azarga',
+  'Campalingo',
+  'Canjalon',
+  'España',
+  'Mabini',
+  'Mabulo',
+  'Otod',
+  'Panangcalan',
+  'Pili',
+  'Poblacion',
+  'Taclobo',
+];
+
 const API_BASE_URL =
   import.meta.env.VITE_API_URL ||
   import.meta.env.VITE_API_BASE_URL ||
@@ -200,6 +219,42 @@ const getRecordId = (record) => {
  * should appear in Tax Form Manager. 
  */ 
  
+const isQuickSubmitRecord = (record) => {
+  if (!record || typeof record !== 'object') {
+    return false;
+  }
+
+  /*
+   * Manual Registry always wins.
+   * A scanned document does NOT make a Manual Registry record Quick Submit.
+   */
+  const submissionMode = String(
+    record.submission_mode ||
+      record.submissionMode ||
+      record.submission_type ||
+      ''
+  )
+    .trim()
+    .toLowerCase();
+
+  if (
+    submissionMode === 'manual_registry' ||
+    submissionMode === 'manual registry' ||
+    record.manual_registry === true ||
+    record.isManualRegistry === true
+  ) {
+    return false;
+  }
+
+  return (
+    submissionMode === 'quick_submit' ||
+    submissionMode === 'quick submit' ||
+    record.isQuickSubmit === true ||
+    record.is_quick_submit === true ||
+    record.quick_submit === true
+  );
+}
+
 const isApprovedRecord = (record) => { 
   if (!record || typeof record !== 'object') { 
     return false; 
@@ -675,42 +730,18 @@ export default function TaxFormManager({
     property_identification_no: '',
     owner_name: '',
     owner_tin: '',
-    owner_address: '',
     owner_telephone: '',
-    administrator_name: '',
-    administrator_tin: '',
-    administrator_address: '',
-    administrator_telephone: '',
-    location_number_street: '',
     location_barangay_district: '',
-    location_municipality_province_city: 'San Fernando, Romblon',
-    oct_tct_cloa_no: '',
-    cct_no: '',
-    dated: '',
-    survey_no: '',
-    lot_no: '',
-    blk_no: '',
-    total_market_value: '',
-    total_assessed_value: '',
-    total_assessed_value_words: '',
-    taxability_status: 'Taxable',
-    effectivity_qtr: '',
-    effectivity_yr: '',
-    approved_by: '',
-    approval_date: '',
-    cancels_td_no: '',
-    previous_av: '',
-    memoranda: '',
   };
 
   const [manualRegistryForm, setManualRegistryForm] =
     useState(MANUAL_REGISTRY_DEFAULTS);
 
-  const [manualRegistryDocument, setManualRegistryDocument] =
-    useState(null);
+  const [manualRegistryDocuments, setManualRegistryDocuments] =
+    useState([null, null, null]);
 
-  const [manualRegistryPreview, setManualRegistryPreview] =
-    useState('');
+  const [manualRegistryPreviews, setManualRegistryPreviews] =
+    useState(['', '', '']);
 
   const [savingManualRegistry, setSavingManualRegistry] =
     useState(false);
@@ -718,53 +749,83 @@ export default function TaxFormManager({
   const handleManualRegistryChange = (event) => {
     const { name, value } = event.target;
 
+    const numericFields = [
+      'owner_tin',
+      'owner_telephone',
+    ];
+
+    const nextValue = numericFields.includes(name)
+      ? value.replace(/[^0-9]/g, '')
+      : value;
+
     setManualRegistryForm((previous) => ({
       ...previous,
-      [name]: value,
+      [name]: nextValue,
     }));
   };
 
-  const handleManualRegistryDocumentChange = (event) => {
+  const handleManualRegistryDocumentChange = (index, event) => {
     const file = event.target.files?.[0] || null;
 
     if (!file) {
-      setManualRegistryDocument(null);
-      setManualRegistryPreview('');
+      setManualRegistryDocuments((previous) => {
+        const next = [...previous];
+        next[index] = null;
+        return next;
+      });
+
+      setManualRegistryPreviews((previous) => {
+        const next = [...previous];
+        if (next[index]) {
+          URL.revokeObjectURL(next[index]);
+        }
+        next[index] = '';
+        return next;
+      });
+
       return;
     }
 
     if (!file.type.startsWith('image/')) {
       alert('Please select a scanned document image (JPG, PNG, WEBP, etc.).');
       event.target.value = '';
-      setManualRegistryDocument(null);
-      setManualRegistryPreview('');
       return;
     }
 
     if (file.size > 5 * 1024 * 1024) {
-      alert('The scanned document must be smaller than 5MB.');
+      alert('Each scanned document must be smaller than 5MB.');
       event.target.value = '';
-      setManualRegistryDocument(null);
-      setManualRegistryPreview('');
       return;
     }
 
-    if (manualRegistryPreview) {
-      URL.revokeObjectURL(manualRegistryPreview);
-    }
+    setManualRegistryDocuments((previous) => {
+      const next = [...previous];
+      next[index] = file;
+      return next;
+    });
 
-    setManualRegistryDocument(file);
-    setManualRegistryPreview(URL.createObjectURL(file));
+    setManualRegistryPreviews((previous) => {
+      const next = [...previous];
+
+      if (next[index]) {
+        URL.revokeObjectURL(next[index]);
+      }
+
+      next[index] = URL.createObjectURL(file);
+      return next;
+    });
   };
 
   const resetManualRegistry = () => {
-    if (manualRegistryPreview) {
-      URL.revokeObjectURL(manualRegistryPreview);
-    }
+    manualRegistryPreviews.forEach((preview) => {
+      if (preview) {
+        URL.revokeObjectURL(preview);
+      }
+    });
 
     setManualRegistryForm(MANUAL_REGISTRY_DEFAULTS);
-    setManualRegistryDocument(null);
-    setManualRegistryPreview('');
+    setManualRegistryDocuments([null, null, null]);
+    setManualRegistryPreviews(['', '', '']);
   };
 
   const handleSaveManualRegistry = async (event) => {
@@ -780,8 +841,8 @@ export default function TaxFormManager({
       return;
     }
 
-    if (!manualRegistryDocument) {
-      alert('Please scan and attach the original tax declaration document.');
+    if (!manualRegistryDocuments[0]) {
+      alert('The first document scan is required.');
       return;
     }
 
@@ -799,8 +860,10 @@ export default function TaxFormManager({
         ...manualRegistryForm,
         id: `TD-MANUAL-${Date.now()}`,
         full_name: manualRegistryForm.owner_name,
-        submission_mode: 'manual',
+        submission_mode: 'manual_registry',
         registry_type: 'Manual Registry',
+        manual_registry: true,
+        isManualRegistry: true,
         isQuickSubmit: false,
         is_quick_submit: false,
         quick_submit: false,
@@ -811,8 +874,14 @@ export default function TaxFormManager({
         assessment_rows: [],
         property_image: null,
         document_image: null,
+        document_image_2: null,
+        document_image_3: null,
         image_url: null,
+        image_url_2: null,
+        image_url_3: null,
         file_path: null,
+        file_path_2: null,
+        file_path_3: null,
       };
 
       const response = await submitTaxDeclaration(payload);
@@ -829,55 +898,106 @@ export default function TaxFormManager({
 
       if (!recordId) {
         throw new Error(
-          'The manual registry was created, but the server did not return a valid record ID for the document scan.'
+          'The manual registry was created, but the server did not return a valid record ID for the document scans.'
         );
       }
 
       /*
-       * Upload the scanned document through the existing
-       * tax-declaration image endpoint.
+       * Upload up to three scanned documents.
+       * Scan 1 is required. Scans 2 and 3 are optional.
        */
-      const uploadResponse =
-        await uploadTaxDeclarationImage(
-          manualRegistryDocument,
-          recordId
-        );
+      const documentUrls = [null, null, null];
+      const documentFilePaths = ['', '', ''];
 
-      const uploadedUrl =
-        uploadResponse?.data?.image_url ||
-        uploadResponse?.data?.document_image ||
-        uploadResponse?.image_url ||
-        uploadResponse?.document_image ||
-        uploadResponse?.url ||
-        null;
+      for (let index = 0; index < 3; index += 1) {
+        const documentFile = manualRegistryDocuments[index];
+
+        if (!documentFile) {
+          continue;
+        }
+
+        const uploadResponse =
+          await uploadTaxDeclarationImage(
+            documentFile,
+            recordId
+          );
+
+        documentUrls[index] =
+          uploadResponse?.data?.image_url ||
+          uploadResponse?.data?.document_image ||
+          uploadResponse?.image_url ||
+          uploadResponse?.document_image ||
+          uploadResponse?.url ||
+          null;
+
+        documentFilePaths[index] =
+          uploadResponse?.data?.file_path ||
+          uploadResponse?.file_path ||
+          '';
+      }
 
       let finalRecord = {
         ...payload,
         ...savedRecord,
         id: recordId,
-        submission_mode: 'manual',
+        submission_mode: 'manual_registry',
         registry_type: 'Manual Registry',
+        manual_registry: true,
+        isManualRegistry: true,
+        /*
+         * Manual Registry must NEVER be stored as Quick Submit,
+         * even if the backend returned old/default Quick Submit flags.
+         */
+        isQuickSubmit: false,
+        is_quick_submit: false,
+        quick_submit: false,
+        submission_type: 'manual_registry',
+        isQuickSubmit: false,
+        is_quick_submit: false,
+        quick_submit: false,
         verification_status: 'Approved',
       };
 
       /*
-       * Store the returned scan URL when the upload endpoint
-       * provides one.
+       * Store all returned scan URLs.
+       * The first scan remains compatible with the existing
+       * document_image / image_url fields.
        */
-      if (uploadedUrl) {
+      if (
+        documentUrls[0] ||
+        documentUrls[1] ||
+        documentUrls[2]
+      ) {
         try {
+          const updatePayload = {
+            document_image:
+              documentUrls[0] || finalRecord.document_image || null,
+            document_image_2:
+              documentUrls[1] || finalRecord.document_image_2 || null,
+            document_image_3:
+              documentUrls[2] || finalRecord.document_image_3 || null,
+
+            image_url:
+              documentUrls[0] || finalRecord.image_url || null,
+            image_url_2:
+              documentUrls[1] || finalRecord.image_url_2 || null,
+            image_url_3:
+              documentUrls[2] || finalRecord.image_url_3 || null,
+
+            file_path:
+              documentFilePaths[0] || finalRecord.file_path || '',
+            file_path_2:
+              documentFilePaths[1] || finalRecord.file_path_2 || '',
+            file_path_3:
+              documentFilePaths[2] || finalRecord.file_path_3 || '',
+
+            updated_at: new Date().toISOString(),
+          };
+
           const updateResponse =
             await updateTaxDeclaration(
               recordId,
-              {
-                document_image: uploadedUrl,
-                image_url: uploadedUrl,
-                file_path:
-                  uploadResponse?.file_path ||
-                  finalRecord.file_path ||
-                  '',
-                updated_at: new Date().toISOString(),
-              }
+              updatePayload
             );
 
           finalRecord = {
@@ -885,24 +1005,39 @@ export default function TaxFormManager({
             ...(updateResponse?.data ||
               updateResponse ||
               {}),
-            document_image: uploadedUrl,
-            image_url: uploadedUrl,
+            ...updatePayload,
           };
         } catch (updateError) {
           /*
-           * The file was already uploaded successfully.
+           * The files were already uploaded successfully.
            * Keep the registry successful even if the optional
            * URL metadata update is rejected by an older backend.
            */
           console.warn(
-            '[MANUAL REGISTRY] Document uploaded but URL metadata update failed:',
+            '[MANUAL REGISTRY] Document uploads succeeded but URL metadata update failed:',
             updateError
           );
 
           finalRecord = {
             ...finalRecord,
-            document_image: uploadedUrl,
-            image_url: uploadedUrl,
+            document_image:
+              documentUrls[0] || finalRecord.document_image || null,
+            document_image_2:
+              documentUrls[1] || finalRecord.document_image_2 || null,
+            document_image_3:
+              documentUrls[2] || finalRecord.document_image_3 || null,
+            image_url:
+              documentUrls[0] || finalRecord.image_url || null,
+            image_url_2:
+              documentUrls[1] || finalRecord.image_url_2 || null,
+            image_url_3:
+              documentUrls[2] || finalRecord.image_url_3 || null,
+            file_path:
+              documentFilePaths[0] || finalRecord.file_path || '',
+            file_path_2:
+              documentFilePaths[1] || finalRecord.file_path_2 || '',
+            file_path_3:
+              documentFilePaths[2] || finalRecord.file_path_3 || '',
           };
         }
       }
@@ -913,8 +1048,11 @@ export default function TaxFormManager({
         onUpdateRecord(finalRecord);
       }
 
+      const scanCount =
+        manualRegistryDocuments.filter(Boolean).length;
+
       alert(
-        `Manual tax registry ${manualRegistryForm.td_no} was saved successfully with the scanned document.`
+        `Manual tax registry ${manualRegistryForm.td_no} was saved successfully with ${scanCount} document scan${scanCount === 1 ? '' : 's'}.`
       );
 
       resetManualRegistry();
@@ -1116,13 +1254,18 @@ export default function TaxFormManager({
         (taxabilityCounts[status] || 0) + 
         1; 
  
-      const imageUrl = 
-        getRecordImage(record); 
+      if (isQuickSubmitRecord(record)) {
  
-      if (imageUrl) { 
-        quickSubmitCount += 1; 
-      } else { 
-        fullDetailCount += 1; 
+ 
+        quickSubmitCount += 1;
+ 
+ 
+      } else {
+ 
+ 
+        fullDetailCount += 1;
+ 
+ 
       } 
     }); 
  
@@ -1217,14 +1360,20 @@ export default function TaxFormManager({
   ======================================================= */ 
  
   const handleEditClick = (record) => { 
-    const imageUrl = 
-      getRecordImage(record); 
+    /*
  
-    /* 
-     * Quick Submit/image records are read-only. 
-     */ 
-    if (imageUrl) { 
-      return; 
+     * Only true Quick Submit records are read-only.
+ 
+     * Manual Registry records may contain scanned documents,
+ 
+     * but they are NOT Quick Submit records.
+ 
+     */
+ 
+    if (isQuickSubmitRecord(record)) {
+ 
+      return;
+ 
     } 
  
     setEditingRecord(record); 
@@ -2022,8 +2171,11 @@ export default function TaxFormManager({
                     Manual Tax Registry
                   </h3>
                   <p className="text-[10px] text-slate-500 mt-1">
-                    Register an existing paper tax declaration manually and attach its scanned document.
+                    Register an existing paper tax declaration manually and attach up to three scanned documents.
                   </p>
+                  <span className="inline-flex mt-2 text-[9px] font-bold px-2 py-1 rounded-full bg-purple-100 text-purple-800 border border-purple-200">
+                    Submission Mode: Manual Registry
+                  </span>
                 </div>
 
                 <button
@@ -2043,222 +2195,187 @@ export default function TaxFormManager({
                   </h4>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                    {[
-                      ['td_no', 'TD No. *'],
-                      ['property_identification_no', 'Property Identification No.'],
-                      ['owner_name', 'Owner Name *'],
-                      ['owner_tin', 'Owner TIN'],
-                      ['owner_telephone', 'Owner Telephone'],
-                      ['location_barangay_district', 'Barangay / District'],
-                      ['location_number_street', 'Number / Street'],
-                      ['location_municipality_province_city', 'Municipality / Province / City'],
-                      ['administrator_name', 'Administrator / Beneficial User'],
-                      ['administrator_tin', 'Administrator TIN'],
-                      ['administrator_telephone', 'Administrator Telephone'],
-                      ['administrator_address', 'Administrator Address'],
-                    ].map(([name, label]) => (
-                      <div key={name}>
-                        <label className="block text-[10px] font-bold text-slate-700 mb-1">
-                          {label}
-                        </label>
-                        <input
-                          type="text"
-                          name={name}
-                          value={manualRegistryForm[name] || ''}
-                          onChange={handleManualRegistryChange}
-                          className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs bg-white"
-                        />
-                      </div>
-                    ))}
-
-                    <div className="md:col-span-2 lg:col-span-3">
-                      <label className="block text-[10px] font-bold text-slate-700 mb-1">
-                        Owner Address
-                      </label>
-                      <input
-                        type="text"
-                        name="owner_address"
-                        value={manualRegistryForm.owner_address}
-                        onChange={handleManualRegistryChange}
-                        className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs bg-white"
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
-                  <h4 className="text-xs font-bold text-blue-900 uppercase mb-3">
-                    Property / Title Information
-                  </h4>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-                    {[
-                      ['oct_tct_cloa_no', 'OCT / TCT / CLOA No.'],
-                      ['cct_no', 'CCT No.'],
-                      ['dated', 'Dated'],
-                      ['survey_no', 'Survey No.'],
-                      ['lot_no', 'Lot No.'],
-                      ['blk_no', 'Blk. No.'],
-                      ['effectivity_qtr', 'Effectivity Quarter'],
-                      ['effectivity_yr', 'Effectivity Year'],
-                    ].map(([name, label]) => (
-                      <div key={name}>
-                        <label className="block text-[10px] font-bold text-slate-700 mb-1">
-                          {label}
-                        </label>
-                        <input
-                          type="text"
-                          name={name}
-                          value={manualRegistryForm[name] || ''}
-                          onChange={handleManualRegistryChange}
-                          className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs bg-white"
-                        />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4">
-                  <h4 className="text-xs font-bold text-emerald-900 uppercase mb-3">
-                    Assessment / Tax Information
-                  </h4>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                     <div>
                       <label className="block text-[10px] font-bold text-slate-700 mb-1">
-                        Total Market Value
+                        TD No. *
                       </label>
                       <input
                         type="text"
-                        name="total_market_value"
-                        value={manualRegistryForm.total_market_value}
+                        name="td_no"
+                        value={manualRegistryForm.td_no || ''}
                         onChange={handleManualRegistryChange}
-                        placeholder="e.g. 1,000,000.00"
+                        required
                         className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs bg-white"
+                        placeholder="Enter TD No."
                       />
                     </div>
 
                     <div>
                       <label className="block text-[10px] font-bold text-slate-700 mb-1">
-                        Total Assessed Value
+                        Property Identification No.
                       </label>
                       <input
                         type="text"
-                        name="total_assessed_value"
-                        value={manualRegistryForm.total_assessed_value}
+                        name="property_identification_no"
+                        value={manualRegistryForm.property_identification_no || ''}
                         onChange={handleManualRegistryChange}
-                        placeholder="e.g. 200,000.00"
                         className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs bg-white"
+                        placeholder="Enter Property Identification No."
                       />
                     </div>
 
                     <div>
                       <label className="block text-[10px] font-bold text-slate-700 mb-1">
-                        Taxability Status
+                        Owner Name *
+                      </label>
+                      <input
+                        type="text"
+                        name="owner_name"
+                        value={manualRegistryForm.owner_name || ''}
+                        onChange={handleManualRegistryChange}
+                        required
+                        className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs bg-white"
+                        placeholder="Enter Owner Name"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-700 mb-1">
+                        Owner TIN
+                      </label>
+                      <input
+                        type="number"
+                        name="owner_tin"
+                        value={manualRegistryForm.owner_tin || ''}
+                        onChange={handleManualRegistryChange}
+                        min="0"
+                        step="1"
+                        inputMode="numeric"
+                        className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs bg-white"
+                        placeholder="Enter numeric TIN"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-700 mb-1">
+                        Owner Telephone
+                      </label>
+                      <input
+                        type="number"
+                        name="owner_telephone"
+                        value={manualRegistryForm.owner_telephone || ''}
+                        onChange={handleManualRegistryChange}
+                        min="0"
+                        step="1"
+                        inputMode="numeric"
+                        className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs bg-white"
+                        placeholder="Enter telephone number"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-700 mb-1">
+                        Barangay / District
                       </label>
                       <select
-                        name="taxability_status"
-                        value={manualRegistryForm.taxability_status}
+                        name="location_barangay_district"
+                        value={manualRegistryForm.location_barangay_district || ''}
                         onChange={handleManualRegistryChange}
                         className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs bg-white"
                       >
-                        <option value="Taxable">Taxable</option>
-                        <option value="Exempt">Exempt</option>
+                        <option value="">
+                          Select Barangay / District
+                        </option>
+                        {SAN_FERNANDO_ROMBLON_BARANGAYS.map((barangay) => (
+                          <option key={barangay} value={barangay}>
+                            {barangay}
+                          </option>
+                        ))}
                       </select>
-                    </div>
-
-                    <div className="md:col-span-2 lg:col-span-3">
-                      <label className="block text-[10px] font-bold text-slate-700 mb-1">
-                        Total Assessed Value in Words
-                      </label>
-                      <input
-                        type="text"
-                        name="total_assessed_value_words"
-                        value={manualRegistryForm.total_assessed_value_words}
-                        onChange={handleManualRegistryChange}
-                        className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs bg-white"
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
-                  <h4 className="text-xs font-bold text-amber-900 uppercase mb-3">
-                    Approval / History
-                  </h4>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-                    {[
-                      ['approved_by', 'Approved By'],
-                      ['approval_date', 'Approval Date'],
-                      ['cancels_td_no', 'Cancels TD No.'],
-                      ['previous_av', 'Previous AV'],
-                    ].map(([name, label]) => (
-                      <div key={name}>
-                        <label className="block text-[10px] font-bold text-slate-700 mb-1">
-                          {label}
-                        </label>
-                        <input
-                          type="text"
-                          name={name}
-                          value={manualRegistryForm[name] || ''}
-                          onChange={handleManualRegistryChange}
-                          className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs bg-white"
-                        />
-                      </div>
-                    ))}
-
-                    <div className="md:col-span-2 lg:col-span-4">
-                      <label className="block text-[10px] font-bold text-slate-700 mb-1">
-                        Memoranda
-                      </label>
-                      <textarea
-                        name="memoranda"
-                        value={manualRegistryForm.memoranda}
-                        onChange={handleManualRegistryChange}
-                        rows={3}
-                        className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs bg-white resize-y"
-                      />
+                      <p className="text-[9px] text-slate-500 mt-1">
+                        San Fernando, Romblon
+                      </p>
                     </div>
                   </div>
                 </div>
 
                 <div className="bg-purple-50 border border-purple-200 rounded-xl p-4">
                   <h4 className="text-xs font-bold text-purple-900 uppercase mb-2">
-                    Document Scan *
+                    Document Scans
                   </h4>
 
-                  <p className="text-[10px] text-slate-500 mb-3">
-                    Upload a clear scanned image of the physical Tax Declaration. Maximum 5MB.
+                  <p className="text-[10px] text-slate-500 mb-4">
+                    Scan 1 is required. Scan 2 and Scan 3 are optional. Each scanned document must be an image and no larger than 5MB.
                   </p>
 
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={handleManualRegistryDocumentChange}
-                    className="w-full border border-slate-300 bg-white rounded-lg px-3 py-2 text-xs"
-                  />
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                    {[
+                      {
+                        index: 0,
+                        label: 'Document Scan 1 *',
+                        description: 'Required',
+                      },
+                      {
+                        index: 1,
+                        label: 'Document Scan 2',
+                        description: 'Optional',
+                      },
+                      {
+                        index: 2,
+                        label: 'Document Scan 3',
+                        description: 'Optional',
+                      },
+                    ].map(({ index, label, description }) => (
+                      <div
+                        key={index}
+                        className="border border-purple-200 rounded-xl bg-white p-3"
+                      >
+                        <label className="block text-[10px] font-bold text-purple-900 mb-1">
+                          {label}
+                        </label>
 
-                  {manualRegistryPreview && (
-                    <div className="mt-4 border border-purple-200 rounded-xl bg-white overflow-hidden">
-                      <div className="flex items-center justify-between px-3 py-2 border-b bg-purple-50">
-                        <span className="text-[10px] font-bold text-purple-900">
-                          Scan Preview
-                        </span>
-                        <span className="text-[10px] text-slate-500 truncate max-w-[60%]">
-                          {manualRegistryDocument?.name}
-                        </span>
-                      </div>
+                        <p className="text-[9px] text-slate-500 mb-2">
+                          {description}
+                        </p>
 
-                      <div className="p-3 flex justify-center bg-slate-100">
-                        <img
-                          src={manualRegistryPreview}
-                          alt="Scanned Tax Declaration Preview"
-                          className="max-h-96 max-w-full object-contain rounded border border-slate-200"
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={(event) =>
+                            handleManualRegistryDocumentChange(
+                              index,
+                              event
+                            )
+                          }
+                          className="w-full border border-slate-300 bg-white rounded-lg px-2 py-2 text-[10px]"
                         />
+
+                        {manualRegistryPreviews[index] && (
+                          <div className="mt-3 border border-purple-200 rounded-lg bg-slate-50 overflow-hidden">
+                            <div className="px-2 py-1.5 border-b bg-purple-50">
+                              <span className="text-[9px] font-bold text-purple-900">
+                                Scan {index + 1} Preview
+                              </span>
+                            </div>
+
+                            <div className="p-2 flex justify-center">
+                              <img
+                                src={manualRegistryPreviews[index]}
+                                alt={`Scanned Tax Declaration Document ${index + 1}`}
+                                className="max-h-56 max-w-full object-contain rounded border border-slate-200"
+                              />
+                            </div>
+
+                            <div className="px-2 pb-2">
+                              <p className="text-[9px] text-slate-500 truncate">
+                                {manualRegistryDocuments[index]?.name}
+                              </p>
+                            </div>
+                          </div>
+                        )}
                       </div>
-                    </div>
-                  )}
+                    ))}
+                  </div>
                 </div>
 
                 <div className="flex flex-col sm:flex-row justify-end gap-2 pt-2 border-t border-slate-200">
@@ -2278,7 +2395,7 @@ export default function TaxFormManager({
                   >
                     {savingManualRegistry
                       ? 'Saving Registry...'
-                      : 'Save Manual Registry + Scan'}
+                      : 'Save Manual Registry + Scans'}
                   </button>
                 </div>
               </form>
@@ -2365,8 +2482,7 @@ export default function TaxFormManager({
                       const imageUrl = 
                         getRecordImage(item); 
  
-                      const isQuickSubmit = 
-                        Boolean(imageUrl); 
+                      const isQuickSubmit = isQuickSubmitRecord(item); 
  
                       return ( 
  
@@ -3846,4 +3962,4 @@ export default function TaxFormManager({
  
     </div> 
   ); 
-}
+}  
