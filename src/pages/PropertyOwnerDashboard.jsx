@@ -84,6 +84,9 @@ const ASSESSMENT_COLUMNS = [
 const NOT_RELEASED_MESSAGE =
   'This request must be verified and released by the Assessor first before you can access the document.';
 
+const OTHER_OWNER_MESSAGE =
+  'This Tax Declaration was submitted by another account. You can view and export it, but only its owner can edit it.';
+
 // =========================================================
 // HELPERS
 // =========================================================
@@ -206,6 +209,35 @@ const canAccessRequest = (request) => isReleasedRequest(request);
 
 const canEditRequest = (request) => isReleasedRequest(request);
 
+// Submission type for a declaration that belongs to ANOTHER account.
+// An explicit flag wins; otherwise it is "full" only when the record
+// really contains full-detail data, so Quick Submit records stay Quick.
+const getSharedSubmissionMode = (record) => {
+  if (!record) return 'quick';
+
+  if (
+    record.submission_mode === 'quick' ||
+    record.isQuickSubmit === true ||
+    record.is_quick_submit === true ||
+    record.quick_submit === true
+  ) {
+    return 'quick';
+  }
+
+  if (record.submission_mode === 'full') return 'full';
+
+  const hasFullData =
+    parseRows(record.assessment_rows).length > 0 ||
+    Boolean(
+      record.owner_tin ||
+        record.owner_address ||
+        record.location_number_street ||
+        record.total_market_value
+    );
+
+  return hasFullData ? 'full' : 'quick';
+};
+
 // ---------------------------------------------------------
 // Notification helpers
 // "approved" = the Assessor verified and released the request.
@@ -307,6 +339,8 @@ export default function PropertyOwnerDashboard() {
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
   const [records, setRecords] = useState([]);
+  // Declarations submitted by OTHER accounts that this owner requested
+  const [sharedRecords, setSharedRecords] = useState([]);
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -499,10 +533,60 @@ export default function PropertyOwnerDashboard() {
     if (recordError) throw recordError;
     if (requestError) throw requestError;
 
+    // Declarations submitted by other accounts that this owner has requested
+    // (only returned by the database once the request is Released).
+    const sharedRows = [];
+
+    try {
+      const seen = new Set((recordRows || []).map((r) => r.id));
+
+      const ids = [
+        ...new Set(
+          (requestRows || [])
+            .map((r) => r.tax_declaration_id)
+            .filter((id) => id && !seen.has(id))
+        )
+      ];
+
+      const tdNos = [
+        ...new Set(
+          (requestRows || []).map((r) => r.td_no).filter(Boolean)
+        )
+      ];
+
+      const queries = [];
+
+      if (ids.length > 0) {
+        queries.push(
+          supabase.from('tax_declarations').select('*').in('id', ids)
+        );
+      }
+
+      if (tdNos.length > 0) {
+        queries.push(
+          supabase.from('tax_declarations').select('*').in('td_no', tdNos)
+        );
+      }
+
+      const results = await Promise.all(queries);
+
+      results.forEach(({ data }) => {
+        (data || []).forEach((row) => {
+          if (!seen.has(row.id)) {
+            seen.add(row.id);
+            sharedRows.push(row);
+          }
+        });
+      });
+    } catch {
+      // ignore - shared declarations are optional
+    }
+
     return {
       profileData: profileData || null,
       recordRows: recordRows || [],
-      requestRows: requestRows || []
+      requestRows: requestRows || [],
+      sharedRows
     };
   };
 
@@ -512,11 +596,12 @@ export default function PropertyOwnerDashboard() {
     setError('');
 
     try {
-      const { profileData, recordRows, requestRows } =
+      const { profileData, recordRows, requestRows, sharedRows } =
         await fetchPortalData(uid);
 
       setProfile(profileData);
       setRecords(recordRows);
+      setSharedRecords(sharedRows);
       setRequests(requestRows);
 
       // Notify about requests approved / rejected since the last visit
@@ -537,9 +622,11 @@ export default function PropertyOwnerDashboard() {
   // Silent reload (no loading flash) - used after saving and on realtime changes
   const refreshData = async (uid) => {
     try {
-      const { recordRows, requestRows } = await fetchPortalData(uid);
+      const { recordRows, requestRows, sharedRows } =
+        await fetchPortalData(uid);
 
       setRecords(recordRows);
+      setSharedRecords(sharedRows);
       setRequests(requestRows);
 
       // Notify when the Assessor approves / rejects a request
@@ -804,56 +891,50 @@ export default function PropertyOwnerDashboard() {
       throw new Error('Invalid Tax Declaration request.');
     }
 
-    const uid = uidOverride || session?.user?.id;
-
-    let declaration = null;
+    // The declaration may have been submitted by ANOTHER account, so it is
+    // looked up without an owner filter. The database (RLS) only returns it
+    // once the Assessor has released this owner's request.
+    const lookups = [];
 
     if (request.tax_declaration_id) {
+      lookups.push(['id', request.tax_declaration_id]);
+    }
+
+    if (request.td_no) {
+      lookups.push(['td_no', request.td_no]);
+    }
+
+    if (request.property_identification_no) {
+      lookups.push([
+        'property_identification_no',
+        request.property_identification_no
+      ]);
+    }
+
+    for (const [column, value] of lookups) {
       const { data, error } = await supabase
         .from('tax_declarations')
         .select('*')
-        .eq('id', request.tax_declaration_id)
-        .eq('submitted_by', uid)
-        .maybeSingle();
+        .eq(column, value)
+        .order('submitted_at', { ascending: true })
+        .limit(1);
 
       if (error) throw error;
 
-      declaration = data;
+      if (data && data.length > 0) return data[0];
     }
 
-    if (!declaration && request.td_no) {
-      const { data, error } = await supabase
-        .from('tax_declarations')
-        .select('*')
-        .eq('td_no', request.td_no)
-        .eq('submitted_by', uid)
-        .maybeSingle();
+    // No declaration record could be read: show what is stored on the
+    // request itself instead of an error (view-only, Quick layout).
+    const fallback = { ...request };
+    delete fallback.id;
 
-      if (error) throw error;
-
-      declaration = data;
-    }
-
-    if (
-      !declaration &&
-      request.property_identification_no
-    ) {
-      const { data, error } = await supabase
-        .from('tax_declarations')
-        .select('*')
-        .eq(
-          'property_identification_no',
-          request.property_identification_no
-        )
-        .eq('submitted_by', uid)
-        .maybeSingle();
-
-      if (error) throw error;
-
-      declaration = data;
-    }
-
-    return declaration;
+    return {
+      ...fallback,
+      id: null,
+      submission_mode: 'quick',
+      _fromRequest: true
+    };
   };
 
   // =========================================================
@@ -875,12 +956,6 @@ export default function PropertyOwnerDashboard() {
     try {
       const declaration =
         await findDeclarationForRequest(request, uidOverride);
-
-      if (!declaration) {
-        throw new Error(
-          'The Tax Declaration record connected to this request could not be found.'
-        );
-      }
 
       setSelectedRequest(request);
       setSelectedDeclaration(declaration);
@@ -925,10 +1000,18 @@ export default function PropertyOwnerDashboard() {
           await findDeclarationForRequest(request);
       }
 
-      if (!declaration) {
+      if (declaration._fromRequest) {
         throw new Error(
-          'The Tax Declaration record connected to this request could not be found.'
+          'Only the request details are available, so there is nothing to edit.'
         );
+      }
+
+      // Only the account that submitted the declaration can edit it
+      if (
+        declaration.submitted_by &&
+        declaration.submitted_by !== session?.user?.id
+      ) {
+        throw new Error(OTHER_OWNER_MESSAGE);
       }
 
       setSelectedRequest(request);
@@ -1059,6 +1142,15 @@ export default function PropertyOwnerDashboard() {
     // The request may have been changed by the Assessor while editing
     if (!canEditRequest(selectedRequest)) {
       setError(NOT_RELEASED_MESSAGE);
+      return;
+    }
+
+    // Declarations submitted by another account are view-only
+    if (
+      selectedDeclaration.submitted_by &&
+      selectedDeclaration.submitted_by !== session.user.id
+    ) {
+      setError(OTHER_OWNER_MESSAGE);
       return;
     }
 
@@ -1352,12 +1444,6 @@ export default function PropertyOwnerDashboard() {
 
       const declaration =
         await findDeclarationForRequest(request);
-
-      if (!declaration) {
-        throw new Error(
-          'The Tax Declaration record connected to this request could not be found.'
-        );
-      }
 
       // ---------------------------------------------------------
       // FORM-STYLE PDF
@@ -2284,11 +2370,27 @@ export default function PropertyOwnerDashboard() {
       ? editData
       : selectedDeclaration;
 
-  const modalMode = getSubmissionMode(modalData);
+  const modalIsOthers =
+    Boolean(modalData?.submitted_by) &&
+    modalData.submitted_by !== session?.user?.id;
+
+  const modalMode = modalData?._fromRequest
+    ? 'quick'
+    : modalIsOthers
+      ? getSharedSubmissionMode(modalData)
+      : getSubmissionMode(modalData);
   const currentImage = getImageValue(modalData);
 
   // Editing is allowed only when the request status is "Released"
-  const canEdit = canEditRequest(selectedRequest);
+  const canEdit =
+    canEditRequest(selectedRequest) &&
+    !selectedDeclaration?._fromRequest &&
+    (!selectedDeclaration?.submitted_by ||
+      selectedDeclaration.submitted_by === session?.user?.id);
+
+  const isOtherOwnersDeclaration =
+    Boolean(selectedDeclaration?.submitted_by) &&
+    selectedDeclaration.submitted_by !== session?.user?.id;
 
   // Small render helpers (same components / same layout as before)
   const field = (label, key, extra = {}) => (
@@ -2740,7 +2842,7 @@ export default function PropertyOwnerDashboard() {
                   {requests.map((r) => {
 
                     const matchingRecord =
-                      records.find(
+                      [...records, ...sharedRecords].find(
                         (record) =>
                           (
                             r.tax_declaration_id &&
@@ -2757,10 +2859,14 @@ export default function PropertyOwnerDashboard() {
                           )
                       );
 
+                    const matchIsOwn =
+                      Boolean(matchingRecord) &&
+                      records.some((x) => x.id === matchingRecord.id);
+
                     const mode =
-                      getSubmissionMode(
-                        matchingRecord
-                      );
+                      matchingRecord && !matchIsOwn
+                        ? getSharedSubmissionMode(matchingRecord)
+                        : getSubmissionMode(matchingRecord);
 
                     const released = canAccessRequest(r);
                     const rejected = normalizeStatus(r) === 'rejected';
@@ -3123,7 +3229,11 @@ export default function PropertyOwnerDashboard() {
 
                   {!canEdit && (
                     <span className="mr-auto text-xs text-slate-500">
-                      Status: {selectedRequest?.verification_status || 'Pending'} — editing is available only when the request is Released.
+                      {selectedDeclaration?._fromRequest
+                        ? 'Showing the request details. No submitted declaration record is linked, so editing is not available.'
+                        : isOtherOwnersDeclaration
+                        ? OTHER_OWNER_MESSAGE
+                        : `Status: ${selectedRequest?.verification_status || 'Pending'} — editing is available only when the request is Released.`}
                     </span>
                   )}
 
@@ -3135,7 +3245,9 @@ export default function PropertyOwnerDashboard() {
                     title={
                       canEdit
                         ? 'Edit this Tax Declaration'
-                        : 'Only Released requests can be edited'
+                        : isOtherOwnersDeclaration
+                          ? 'Only the owner of this declaration can edit it'
+                          : 'Only Released requests can be edited'
                     }
                     className={`text-white px-4 py-2 rounded-lg text-xs font-bold ${
                       canEdit
