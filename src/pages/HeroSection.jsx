@@ -69,13 +69,13 @@ export default function HeroSection({
 
       <div className="absolute inset-0 opacity-10 bg-[radial-gradient(#3b82f6_1px,transparent_1px)] [background-size:16px_16px] pointer-events-none"></div>
 
+      {/* Top Header Controls */}
       <div className="absolute top-6 right-6 z-20 flex gap-3">
-       
         <button 
-          onClick={onGoToLogin}
-          className="bg-blue-700/60 hover:bg-blue-600 text-white text-xs font-semibold px-4 py-2.5 rounded-xl border border-blue-500/40 transition shadow"
+          onClick={() => navigate('/about')}
+          className="bg-blue-900/40 hover:bg-blue-800/60 text-slate-200 hover:text-white text-xs font-semibold px-4 py-2.5 rounded-xl border border-blue-500/30 transition shadow"
         >
-          Admin Portal Login
+          About Us
         </button>
       </div>
 
@@ -98,14 +98,21 @@ export default function HeroSection({
             onClick={() => setShowTermsModal(true)}
             className="bg-blue-600 hover:bg-blue-500 text-white font-semibold px-8 py-4 rounded-xl shadow-lg transition duration-200 flex items-center justify-center gap-2 text-base w-full sm:w-auto"
           >
-            <span>Access Tax Declaration Form</span>
+            <span>Lot Owners Portal</span>
             <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
               <path fillRule="evenodd" d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z" clipRule="evenodd" />
             </svg>
           </button>
 
-          {/* New Request Tax Declaration Form Button */}
-         
+          <button 
+            onClick={onGoToLogin}
+            className="bg-blue-700/80 hover:bg-blue-600 text-white font-semibold px-8 py-4 rounded-xl border border-blue-500/40 shadow-lg transition duration-200 flex items-center justify-center gap-2 text-base w-full sm:w-auto"
+          >
+            <span>Admin Portal Login</span>
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1" />
+            </svg>
+          </button>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 pt-12 border-t border-blue-800/60 text-center max-w-3xl mx-auto">

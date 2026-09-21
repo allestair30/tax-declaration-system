@@ -7,6 +7,7 @@ import {
 } from 'react-router-dom';
 
 import HeroSection from './pages/HeroSection';
+import AboutUs from './pages/AboutUs';
 import TaxDecForm from './pages/TaxDecForm';
 import RequestTaxDeclarationForm from './pages/RequestTaxDeclarationForm';
 import LoginPage from './pages/LoginPage';
@@ -187,9 +188,6 @@ export default function AppRoutes() {
   ======================================================= */
 
   const handleAddNewRecord = async (newRecord) => {
-    // TaxDecForm already saves the declaration to Supabase.
-    // Refresh the parent state from the database instead of Supabase
-
     const { data, error } = await supabase
       .from('tax_declarations')
       .select('*')
@@ -361,15 +359,7 @@ export default function AppRoutes() {
       loggedInRole
     );
 
-    /* -----------------------------------------
-       SAVE ROLE
-    ----------------------------------------- */
-
     setUserRole(loggedInRole);
-
-    /* -----------------------------------------
-       ADMINISTRATOR → TAX ANALYTICS
-    ----------------------------------------- */
 
     if (
       loggedInRole === 'administrator' ||
@@ -387,10 +377,6 @@ export default function AppRoutes() {
       return;
     }
 
-    /* -----------------------------------------
-       ASSESSOR → ADMIN DASHBOARD
-    ----------------------------------------- */
-
     if (loggedInRole === 'assessor') {
       console.log(
         '[APP] Assessor → /dashboard'
@@ -402,10 +388,6 @@ export default function AppRoutes() {
 
       return;
     }
-
-    /* -----------------------------------------
-       UNKNOWN ROLE
-    ----------------------------------------- */
 
     console.error(
       '[APP] Unknown role:',
@@ -452,10 +434,6 @@ export default function AppRoutes() {
     );
   };
 
-  const goToUserLogin = () => {
-    navigate('/user-login');
-  };
-
   const goToRequestForm = () => {
     navigate(
       propertyOwnerSession
@@ -496,10 +474,6 @@ export default function AppRoutes() {
     navigate('/management');
   };
 
-  const goToAnalytics = () => {
-    navigate('/analytics');
-  };
-
   /* =======================================================
      ROUTES
   ======================================================= */
@@ -524,9 +498,16 @@ export default function AppRoutes() {
           }
         />
 
-        {/* =================================================
-            NOTICE DASHBOARD
-        ================================================= */}
+        <Route
+          path="/about"
+          element={
+            <ErrorBoundary>
+              <AboutUs />
+            </ErrorBoundary>
+          }
+        />
+
+        {/* NOTICE DASHBOARD */}
 
         <Route
           path="/notice-dashboard"
@@ -558,9 +539,7 @@ export default function AppRoutes() {
           }
         />
 
-        {/* =================================================
-            PROPERTY OWNER USER PORTAL
-        ================================================= */}
+        {/* PROPERTY OWNER USER PORTAL */}
 
         <Route
           path="/user-login"
@@ -596,9 +575,7 @@ export default function AppRoutes() {
           element={<PropertyOwnerRegister />}
         />
 
-        {/* =================================================
-            USER DASHBOARD
-        ================================================= */}
+        {/* USER DASHBOARD */}
 
         <Route
           path="/user-dashboard"
@@ -630,10 +607,7 @@ export default function AppRoutes() {
           }
         />
 
-        {/* =================================================
-            TAX DECLARATION FORM
-            AUTHENTICATED PROPERTY OWNERS ONLY
-        ================================================= */}
+        {/* TAX DECLARATION FORM */}
 
         <Route
           path="/form"
@@ -667,10 +641,7 @@ export default function AppRoutes() {
           }
         />
 
-        {/* =================================================
-            REQUEST TAX DECLARATION
-            AUTHENTICATED PROPERTY OWNERS ONLY
-        ================================================= */}
+        {/* REQUEST TAX DECLARATION */}
 
         <Route
           path="/request-form"
@@ -699,9 +670,7 @@ export default function AppRoutes() {
           }
         />
 
-        {/* =================================================
-            LOGIN
-        ================================================= */}
+        {/* LOGIN */}
 
         <Route
           path="/login"
@@ -713,9 +682,7 @@ export default function AppRoutes() {
           }
         />
 
-        {/* =================================================
-            ASSESSOR DASHBOARD
-        ================================================= */}
+        {/* ASSESSOR DASHBOARD */}
 
         <Route
           path="/dashboard"
@@ -733,9 +700,7 @@ export default function AppRoutes() {
           }
         />
 
-        {/* =================================================
-            ALIAS REDIRECTS FOR DASHBOARD
-        ================================================= */}
+        {/* ALIAS REDIRECTS FOR DASHBOARD */}
 
         <Route
           path="/admin-dashboard"
@@ -767,9 +732,7 @@ export default function AppRoutes() {
           }
         />
 
-        {/* =================================================
-            TAX FORM MANAGER
-        ================================================= */}
+        {/* TAX FORM MANAGER */}
 
         <Route
           path="/management"
@@ -783,9 +746,7 @@ export default function AppRoutes() {
           }
         />
 
-        {/* =================================================
-            ADMINISTRATOR ANALYTICS
-        ================================================= */}
+        {/* ADMINISTRATOR ANALYTICS */}
 
         <Route
           path="/analytics"
@@ -801,9 +762,7 @@ export default function AppRoutes() {
           }
         />
 
-        {/* =================================================
-            UNKNOWN URL - FALLBACK
-        ================================================= */}
+        {/* UNKNOWN URL - FALLBACK */}
 
         <Route
           path="*"
